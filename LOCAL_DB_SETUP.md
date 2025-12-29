@@ -6,11 +6,6 @@ This guide will help you set up a local PostgreSQL database with pgvector extens
 
 ### Option 1: Using the Setup Script (Recommended)
 
-**On Windows (PowerShell):**
-```powershell
-.\setup-local-db.ps1
-```
-
 **On Linux/Mac:**
 ```bash
 chmod +x setup-local-db.sh

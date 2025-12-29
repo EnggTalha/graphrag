@@ -126,9 +126,7 @@ LLM_CHOICE=gemini-2.5-flash
 
 ### ⚡ Fast Setup
 
-See **[QUICK_START.md](QUICK_START.md)** for a command-by-command guide.
-
-See **[SETUP_GUIDE.md](SETUP_GUIDE.md)** for detailed setup instructions.
+See **[SETUP_LINUX.md](SETUP_LINUX.md)** for a complete step-by-step Linux setup guide.
 
 ### 1. Your Documents Are Ready
 
