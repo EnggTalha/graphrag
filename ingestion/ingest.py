@@ -7,13 +7,24 @@ import asyncio
 import logging
 import json
 import glob
+import hashlib
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import argparse
+import sys
 
 import asyncpg
 from dotenv import load_dotenv
+
+# File watching
+try:
+    from watchdog.observers import Observer
+    from watchdog.events import FileSystemEventHandler, FileCreatedEvent, FileModifiedEvent
+    WATCHDOG_AVAILABLE = True
+except ImportError:
+    WATCHDOG_AVAILABLE = False
+    logging.warning("watchdog not installed. Install with: pip install watchdog")
 
 from .chunker import ChunkingConfig, create_chunker, DocumentChunk
 from .embedder import create_embedder
@@ -80,15 +91,30 @@ class DocumentIngestionPipeline:
         if self._initialized:
             return
         
-        logger.info("Initializing ingestion pipeline...")
+        logger.info("="*70)
+        logger.info("🔧 INITIALIZING INGESTION PIPELINE")
+        logger.info("="*70)
         
-        # Initialize database connections
-        await initialize_database()
-        await initialize_graph()
-        await self.graph_builder.initialize()
-        
-        self._initialized = True
-        logger.info("Ingestion pipeline initialized")
+        try:
+            logger.info("   📊 Connecting to PostgreSQL...")
+            await initialize_database()
+            logger.info("   ✅ PostgreSQL connected")
+            
+            logger.info("   🕸️  Connecting to Neo4j...")
+            await initialize_graph()
+            logger.info("   ✅ Neo4j connected")
+            
+            logger.info("   🔗 Initializing Graphiti client...")
+            await self.graph_builder.initialize()
+            logger.info("   ✅ Graphiti initialized")
+            
+            self._initialized = True
+            logger.info("="*70)
+            logger.info("✅ INGESTION PIPELINE READY")
+            logger.info("="*70)
+        except Exception as e:
+            logger.error(f"❌ FAILED TO INITIALIZE: {e}")
+            raise
     
     async def close(self):
         """Close database connections."""
@@ -97,6 +123,31 @@ class DocumentIngestionPipeline:
             await close_graph()
             await close_database()
             self._initialized = False
+    
+    async def _document_exists(self, source_path: str) -> bool:
+        """Check if a document with the given source path already exists."""
+        try:
+            async with db_pool.acquire() as conn:
+                result = await conn.fetchval(
+                    "SELECT COUNT(*) FROM documents WHERE source = $1",
+                    source_path
+                )
+                return result > 0
+        except Exception as e:
+            logger.warning(f"Error checking if document exists: {e}")
+            return False
+    
+    async def _get_file_hash(self, file_path: str) -> str:
+        """Calculate MD5 hash of file for change detection."""
+        hash_md5 = hashlib.md5()
+        try:
+            with open(file_path, "rb") as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    hash_md5.update(chunk)
+            return hash_md5.hexdigest()
+        except Exception as e:
+            logger.warning(f"Error calculating file hash: {e}")
+            return ""
     
     async def ingest_documents(
         self,
@@ -116,31 +167,73 @@ class DocumentIngestionPipeline:
         
         # Clean existing data if requested
         if self.clean_before_ingest:
+            logger.info("🧹 Cleaning existing data from databases...")
             await self._clean_databases()
+            logger.info("✅ Database cleaned")
         
-        # Find all markdown files
+        # Find all supported files
         markdown_files = self._find_markdown_files()
         
         if not markdown_files:
-            logger.warning(f"No markdown files found in {self.documents_folder}")
+            logger.warning(f"⚠️  No files found in {self.documents_folder}")
             return []
         
-        logger.info(f"Found {len(markdown_files)} markdown files to process")
+        logger.info(f"\n{'='*70}")
+        logger.info(f"📁 Found {len(markdown_files)} file(s) to process")
+        logger.info(f"📂 Folder: {self.documents_folder}")
+        logger.info(f"{'='*70}\n")
+        
+        # Check existing documents
+        logger.info("🔍 Checking for already ingested files...")
+        files_to_process = []
+        files_skipped = []
+        
+        for file_path in markdown_files:
+            source_path = os.path.relpath(file_path, self.documents_folder)
+            exists = await self._document_exists(source_path)
+            
+            if exists:
+                files_skipped.append(file_path)
+                logger.info(f"⏭️  SKIPPED (already ingested): {os.path.basename(file_path)}")
+            else:
+                files_to_process.append(file_path)
+        
+        if files_skipped:
+            logger.info(f"\n✅ Skipped {len(files_skipped)} already ingested file(s)")
+        
+        if not files_to_process:
+            logger.info("\n✨ All files are already ingested! Nothing to do.")
+            return []
+        
+        logger.info(f"\n🚀 Processing {len(files_to_process)} new file(s)...\n")
         
         results = []
+        start_time = datetime.now()
         
-        for i, file_path in enumerate(markdown_files):
+        for i, file_path in enumerate(files_to_process, 1):
             try:
-                logger.info(f"Processing file {i+1}/{len(markdown_files)}: {file_path}")
+                file_name = os.path.basename(file_path)
+                logger.info(f"\n{'─'*70}")
+                logger.info(f"📄 [{i}/{len(files_to_process)}] Processing: {file_name}")
+                logger.info(f"   Path: {file_path}")
+                logger.info(f"{'─'*70}")
                 
                 result = await self._ingest_single_document(file_path)
                 results.append(result)
                 
+                # Log result
+                status = "✅" if not result.errors else "❌"
+                logger.info(f"{status} Completed: {file_name}")
+                logger.info(f"   • Chunks: {result.chunks_created}")
+                logger.info(f"   • Entities: {result.entities_extracted}")
+                logger.info(f"   • Relationships: {result.relationships_created}")
+                logger.info(f"   • Time: {result.processing_time_ms/1000:.2f}s")
+                
                 if progress_callback:
-                    progress_callback(i + 1, len(markdown_files))
+                    progress_callback(i, len(files_to_process))
                 
             except Exception as e:
-                logger.error(f"Failed to process {file_path}: {e}")
+                logger.error(f"❌ Failed to process {file_path}: {e}")
                 results.append(IngestionResult(
                     document_id="",
                     title=os.path.basename(file_path),
@@ -151,11 +244,26 @@ class DocumentIngestionPipeline:
                     errors=[str(e)]
                 ))
         
-        # Log summary
+        # Final summary
+        total_time = (datetime.now() - start_time).total_seconds()
         total_chunks = sum(r.chunks_created for r in results)
+        total_entities = sum(r.entities_extracted for r in results)
+        total_relationships = sum(r.relationships_created for r in results)
         total_errors = sum(len(r.errors) for r in results)
+        successful = len([r for r in results if not r.errors])
         
-        logger.info(f"Ingestion complete: {len(results)} documents, {total_chunks} chunks, {total_errors} errors")
+        logger.info(f"\n{'='*70}")
+        logger.info(f"📊 INGESTION SUMMARY")
+        logger.info(f"{'='*70}")
+        logger.info(f"✅ Successfully processed: {successful}/{len(results)} files")
+        logger.info(f"⏭️  Skipped (already ingested): {len(files_skipped)} files")
+        logger.info(f"📦 Total chunks created: {total_chunks}")
+        logger.info(f"🔗 Total entities extracted: {total_entities}")
+        logger.info(f"🕸️  Total relationships created: {total_relationships}")
+        logger.info(f"⏱️  Total time: {total_time:.2f} seconds ({total_time/60:.2f} minutes)")
+        if total_errors > 0:
+            logger.info(f"❌ Total errors: {total_errors}")
+        logger.info(f"{'='*70}\n")
         
         return results
     
@@ -172,7 +280,15 @@ class DocumentIngestionPipeline:
         start_time = datetime.now()
         
         # Read document with parser
-        document_content, parser_metadata = self._read_document(file_path)
+        logger.info(f"   📖 Reading file: {os.path.basename(file_path)}")
+        try:
+            document_content, parser_metadata = self._read_document(file_path)
+            file_type = parser_metadata.get('file_type', 'unknown')
+            logger.info(f"   ✅ File read successfully ({file_type}, {len(document_content):,} chars)")
+        except Exception as e:
+            logger.error(f"   ❌ FAILED TO READ FILE: {e}")
+            raise
+        
         document_title = self._extract_title(document_content, file_path)
         document_source = os.path.relpath(file_path, self.documents_folder)
         
@@ -180,9 +296,12 @@ class DocumentIngestionPipeline:
         document_metadata = self._extract_document_metadata(document_content, file_path)
         document_metadata.update(parser_metadata)  # Add parser metadata
         
-        logger.info(f"Processing document: {document_title}")
+        logger.info(f"   📝 Document: {document_title}")
+        logger.info(f"   📏 Content length: {len(document_content):,} characters")
+        logger.info(f"   📄 File type: {file_type}")
         
         # Chunk the document
+        logger.info(f"   ✂️  Chunking document...")
         chunks = await self.chunker.chunk_document(
             content=document_content,
             title=document_title,
@@ -191,7 +310,7 @@ class DocumentIngestionPipeline:
         )
         
         if not chunks:
-            logger.warning(f"No chunks created for {document_title}")
+            logger.warning(f"   ⚠️  No chunks created for {document_title}")
             return IngestionResult(
                 document_id="",
                 title=document_title,
@@ -202,43 +321,80 @@ class DocumentIngestionPipeline:
                 errors=["No chunks created"]
             )
         
-        logger.info(f"Created {len(chunks)} chunks")
+        logger.info(f"   ✅ Created {len(chunks)} chunks")
         
-        # Extract entities if configured
+        # Extract entities if configured (before embeddings)
         entities_extracted = 0
-        if self.config.extract_entities:
+        if self.config.extract_entities and not self.config.skip_graph_building:
+            logger.info(f"   🔍 Extracting entities...")
             # For very large documents, skip entity extraction to speed up processing
-            # Entity extraction is mainly useful for knowledge graph, which we limit anyway
             max_chunks_for_entity_extraction = 5000
             if len(chunks) > max_chunks_for_entity_extraction:
-                logger.warning(f"Document has {len(chunks)} chunks. Skipping entity extraction for speed.")
-                logger.warning("Entities will be extracted automatically by Graphiti during graph building.")
-                # Still count as 0 for now, Graphiti will extract them
+                logger.warning(f"   ⚠️  Document has {len(chunks)} chunks. Skipping entity extraction for speed.")
+                logger.info(f"   ℹ️  Entities will be extracted automatically by Graphiti during graph building.")
                 entities_extracted = 0
             else:
-                chunks = await self.graph_builder.extract_entities_from_chunks(chunks)
-                entities_extracted = sum(
-                    len(chunk.metadata.get("entities", {}).get("companies", [])) +
-                    len(chunk.metadata.get("entities", {}).get("technologies", [])) +
-                    len(chunk.metadata.get("entities", {}).get("people", []))
-                    for chunk in chunks
-                )
-                logger.info(f"Extracted {entities_extracted} entities")
+                try:
+                    chunks = await self.graph_builder.extract_entities_from_chunks(chunks)
+                    entities_extracted = sum(
+                        len(chunk.metadata.get("entities", {}).get("companies", [])) +
+                        len(chunk.metadata.get("entities", {}).get("technologies", [])) +
+                        len(chunk.metadata.get("entities", {}).get("people", []))
+                        for chunk in chunks
+                    )
+                    logger.info(f"   ✅ Extracted {entities_extracted} entities")
+                except Exception as e:
+                    logger.warning(f"   ⚠️  Entity extraction failed: {e}")
+                    entities_extracted = 0
         
         # Generate embeddings
-        embedded_chunks = await self.embedder.embed_chunks(chunks)
-        logger.info(f"Generated embeddings for {len(embedded_chunks)} chunks")
+        logger.info(f"   🔢 Generating embeddings for {len(chunks)} chunks...")
+        embedding_start = datetime.now()
+        failed_embeddings = 0
+        
+        for i, chunk in enumerate(chunks):
+            try:
+                embedding = await self.embedder.embed_text(chunk.content)
+                chunk.embedding = embedding
+                
+                # Progress logging
+                if (i + 1) % 50 == 0 or (i + 1) == len(chunks):
+                    elapsed = (datetime.now() - embedding_start).total_seconds()
+                    rate = (i + 1) / elapsed if elapsed > 0 else 0
+                    remaining = (len(chunks) - (i + 1)) / rate if rate > 0 else 0
+                    logger.info(f"      Embeddings: {i+1}/{len(chunks)} ({((i+1)/len(chunks)*100):.1f}%) | "
+                              f"Rate: {rate:.1f} chunks/s | Est. remaining: {remaining:.0f}s")
+            except Exception as e:
+                failed_embeddings += 1
+                logger.warning(f"      ⚠️  Failed embedding for chunk {i}: {e}")
+                # Continue without embedding for this chunk
+        
+        elapsed = (datetime.now() - embedding_start).total_seconds()
+        if failed_embeddings > 0:
+            logger.warning(f"   ⚠️  Embeddings: {len(chunks) - failed_embeddings}/{len(chunks)} successful ({failed_embeddings} failed)")
+        else:
+            logger.info(f"   ✅ Embeddings generated ({len(chunks)} chunks in {elapsed:.1f}s)")
         
         # Save to PostgreSQL
-        document_id = await self._save_to_postgres(
-            document_title,
-            document_source,
-            document_content,
-            embedded_chunks,
-            document_metadata
-        )
+        logger.info(f"   💾 Saving to PostgreSQL...")
+        logger.info(f"      • Document: {document_title}")
+        logger.info(f"      • Chunks: {len(chunks)}")
+        logger.info(f"      • Source: {document_source}")
         
-        logger.info(f"Saved document to PostgreSQL with ID: {document_id}")
+        try:
+            save_start = datetime.now()
+            document_id = await self._save_to_postgres(
+                document_title,
+                document_source,
+                document_content,
+                chunks,  # Use chunks (already have embeddings)
+                document_metadata
+            )
+            save_time = (datetime.now() - save_start).total_seconds()
+            logger.info(f"   ✅ Document saved to PostgreSQL (ID: {document_id[:8]}...) in {save_time:.1f}s")
+        except Exception as e:
+            logger.error(f"   ❌ FAILED TO SAVE TO POSTGRESQL: {e}")
+            raise
         
         # Add to knowledge graph (if enabled)
         relationships_created = 0
@@ -246,22 +402,37 @@ class DocumentIngestionPipeline:
         
         if not self.config.skip_graph_building:
             try:
-                logger.info("Building knowledge graph relationships (this may take several minutes)...")
+                logger.info(f"   🕸️  Building knowledge graph...")
+                logger.info(f"      • Chunks to process: {len(chunks)}")
+                logger.info(f"      • This may take a while for large documents...")
+                
+                graph_start = datetime.now()
                 graph_result = await self.graph_builder.add_document_to_graph(
-                    chunks=embedded_chunks,
+                    chunks=chunks,  # Use chunks (already have embeddings)
                     document_title=document_title,
                     document_source=document_source,
                     document_metadata=document_metadata
                 )
+                graph_time = (datetime.now() - graph_start).total_seconds()
                 
                 relationships_created = graph_result.get("episodes_created", 0)
                 graph_errors = graph_result.get("errors", [])
                 
-                logger.info(f"Added {relationships_created} episodes to knowledge graph")
+                if relationships_created > 0:
+                    logger.info(f"   ✅ Knowledge graph: {relationships_created} relationships created in {graph_time:.1f}s")
+                else:
+                    if graph_errors:
+                        logger.warning(f"   ⚠️  Knowledge graph: No relationships created")
+                        logger.warning(f"      Errors: {len(graph_errors)}")
+                        for error in graph_errors[:3]:  # Show first 3 errors
+                            logger.warning(f"      • {error}")
+                    else:
+                        logger.info(f"   ℹ️  Knowledge graph: Skipped (likely tabular data)")
                 
             except Exception as e:
                 error_msg = f"Failed to add to knowledge graph: {str(e)}"
-                logger.error(error_msg)
+                logger.error(f"   ❌ KNOWLEDGE GRAPH ERROR: {error_msg}")
+                logger.error(f"      Exception type: {type(e).__name__}")
                 graph_errors.append(error_msg)
         else:
             logger.info("Skipping knowledge graph building (skip_graph_building=True)")
@@ -285,8 +456,8 @@ class DocumentIngestionPipeline:
             logger.error(f"Documents folder not found: {self.documents_folder}")
             return []
         
-        # Support multiple file types: .txt, .md, .pdf, .xls, .xlsx, .csv
-        patterns = ["*.md", "*.markdown", "*.txt", "*.pdf", "*.xls", "*.xlsx", "*.csv"]
+        # Support multiple file types: .txt, .md, .pdf, .xls, .xlsx, .csv, .doc, .docx
+        patterns = ["*.md", "*.markdown", "*.txt", "*.pdf", "*.xls", "*.xlsx", "*.csv", "*.doc", "*.docx"]
         files = []
         
         for pattern in patterns:
@@ -389,7 +560,7 @@ class DocumentIngestionPipeline:
                 document_id = document_result["id"]
                 
                 # Insert chunks in batches (pgvector doesn't support bulk copy)
-                logger.info(f"Preparing to insert {len(chunks)} chunks in batches...")
+                logger.info(f"   💾 Saving {len(chunks)} chunks to PostgreSQL...")
                 batch_size = 100
                 total_batches = (len(chunks) + batch_size - 1) // batch_size
                 
@@ -418,9 +589,10 @@ class DocumentIngestionPipeline:
                             chunk.token_count
                         )
                     
-                    logger.info(f"Inserted batch {batch_num}/{total_batches} ({len(batch_chunks)} chunks)")
+                    if batch_num % 5 == 0 or batch_num == total_batches:
+                        logger.info(f"      Batch {batch_num}/{total_batches} saved ({len(batch_chunks)} chunks)")
                 
-                logger.info(f"Successfully saved {len(chunks)} chunks to PostgreSQL")
+                logger.info(f"   ✅ Saved {len(chunks)} chunks to PostgreSQL")
                 return document_id
     
     async def _clean_databases(self):
@@ -440,6 +612,103 @@ class DocumentIngestionPipeline:
         # Clean knowledge graph
         await self.graph_builder.clear_graph()
         logger.info("Cleaned knowledge graph")
+    
+    async def watch_and_ingest(self, check_interval: int = 5):
+        """
+        Continuously watch for new files and ingest them automatically.
+        
+        Args:
+            check_interval: How often to check for new files (seconds)
+        """
+        if not self._initialized:
+            await self.initialize()
+        
+        logger.info("="*70)
+        logger.info("👀 STARTING CONTINUOUS FILE WATCHING")
+        logger.info("="*70)
+        logger.info(f"📂 Watching folder: {self.documents_folder}")
+        logger.info(f"⏱️  Check interval: {check_interval} seconds")
+        logger.info(f"📊 Status updates every: {check_interval * 6} seconds")
+        logger.info("="*70)
+        logger.info("💡 Press Ctrl+C to stop")
+        logger.info("="*70)
+        
+        # Track processed files
+        processed_files = set()
+        last_status_time = datetime.now()
+        status_interval = check_interval * 6  # Show status every 6 checks
+        
+        # Initial ingestion of existing files
+        logger.info("\n🔄 Running initial ingestion of existing files...")
+        initial_results = await self.ingest_documents()
+        for result in initial_results:
+            if result.document_id:
+                processed_files.add(result.title)
+        
+        logger.info("\n✅ Initial ingestion complete. Now watching for new files...\n")
+        
+        try:
+            while True:
+                # Check for new files
+                markdown_files = self._find_markdown_files()
+                new_files = []
+                
+                for file_path in markdown_files:
+                    source_path = os.path.relpath(file_path, self.documents_folder)
+                    
+                    # Check if already processed
+                    exists = await self._document_exists(source_path)
+                    if not exists and file_path not in processed_files:
+                        new_files.append(file_path)
+                
+                # Process new files
+                if new_files:
+                    logger.info(f"\n📁 Found {len(new_files)} new file(s) to process")
+                    for file_path in new_files:
+                        try:
+                            logger.info(f"🚀 Auto-ingesting: {os.path.basename(file_path)}")
+                            result = await self._ingest_single_document(file_path)
+                            
+                            if result.document_id:
+                                processed_files.add(file_path)
+                                logger.info(f"✅ Successfully ingested: {os.path.basename(file_path)} "
+                                          f"({result.chunks_created} chunks)")
+                            else:
+                                logger.warning(f"⚠️  Failed to ingest: {os.path.basename(file_path)}")
+                        except Exception as e:
+                            logger.error(f"❌ Error ingesting {file_path}: {e}")
+                
+                # Show status periodically
+                if (datetime.now() - last_status_time).total_seconds() >= status_interval:
+                    await self._print_status()
+                    last_status_time = datetime.now()
+                
+                # Wait before next check
+                await asyncio.sleep(check_interval)
+                
+        except KeyboardInterrupt:
+            logger.info("\n\n🛑 Stopping file watcher...")
+            await self._print_status()
+            logger.info("✅ File watcher stopped")
+    
+    async def _print_status(self):
+        """Print current status."""
+        try:
+            # Count documents in database
+            async with db_pool.acquire() as conn:
+                doc_count = await conn.fetchval("SELECT COUNT(*) FROM documents")
+                chunk_count = await conn.fetchval("SELECT COUNT(*) FROM chunks")
+            
+            logger.info("\n" + "="*70)
+            logger.info("📊 CURRENT STATUS")
+            logger.info("="*70)
+            logger.info(f"📄 Documents in database: {doc_count}")
+            logger.info(f"📦 Total chunks: {chunk_count}")
+            logger.info(f"📂 Watching folder: {self.documents_folder}")
+            logger.info(f"⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            logger.info("="*70 + "\n")
+        except Exception as e:
+            logger.warning(f"Could not get status: {e}")
 
 
 async def main():
@@ -453,6 +722,8 @@ async def main():
     parser.add_argument("--no-entities", action="store_true", help="Disable entity extraction")
     parser.add_argument("--fast", "-f", action="store_true", help="Fast mode: skip knowledge graph building")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
+    parser.add_argument("--watch", "-w", action="store_true", help="Watch for new files continuously (keeps running)")
+    parser.add_argument("--check-interval", type=int, default=5, help="How often to check for new files in watch mode (seconds)")
     
     args = parser.parse_args()
     
@@ -462,6 +733,11 @@ async def main():
         level=log_level,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
+    
+    # Reduce Neo4j verbosity (only show WARNING and above)
+    logging.getLogger("neo4j").setLevel(logging.WARNING)
+    logging.getLogger("neo4j.io").setLevel(logging.WARNING)
+    logging.getLogger("neo4j.pool").setLevel(logging.WARNING)
     
     # Create ingestion configuration
     config = IngestionConfig(
@@ -480,36 +756,61 @@ async def main():
     )
     
     def progress_callback(current: int, total: int):
-        print(f"Progress: {current}/{total} documents processed")
+        percentage = (current / total) * 100
+        bar_length = 40
+        filled = int(bar_length * current / total)
+        bar = '█' * filled + '░' * (bar_length - filled)
+        print(f"\r   📊 Progress: [{bar}] {current}/{total} ({percentage:.1f}%)", end='', flush=True)
+        if current == total:
+            print()  # New line when complete
     
     try:
-        start_time = datetime.now()
-        
-        results = await pipeline.ingest_documents(progress_callback)
-        
-        end_time = datetime.now()
-        total_time = (end_time - start_time).total_seconds()
-        
-        # Print summary
-        print("\n" + "="*50)
-        print("INGESTION SUMMARY")
-        print("="*50)
-        print(f"Documents processed: {len(results)}")
-        print(f"Total chunks created: {sum(r.chunks_created for r in results)}")
-        print(f"Total entities extracted: {sum(r.entities_extracted for r in results)}")
-        print(f"Total graph episodes: {sum(r.relationships_created for r in results)}")
-        print(f"Total errors: {sum(len(r.errors) for r in results)}")
-        print(f"Total processing time: {total_time:.2f} seconds")
-        print()
-        
-        # Print individual results
-        for result in results:
-            status = "✓" if not result.errors else "✗"
-            print(f"{status} {result.title}: {result.chunks_created} chunks, {result.entities_extracted} entities")
+        # Watch mode: continuously watch for new files
+        if args.watch:
+            if not WATCHDOG_AVAILABLE:
+                logger.error("❌ Watchdog not installed. Install with: pip install watchdog")
+                logger.error("   Or run without --watch flag for one-time ingestion")
+                sys.exit(1)
             
-            if result.errors:
-                for error in result.errors:
-                    print(f"  Error: {error}")
+            # Start watching (handles its own cleanup on KeyboardInterrupt)
+            try:
+                await pipeline.watch_and_ingest(check_interval=args.check_interval)
+            except KeyboardInterrupt:
+                logger.info("\n\n🛑 Stopping file watcher...")
+                await pipeline._print_status()
+                logger.info("✅ File watcher stopped")
+            finally:
+                await pipeline.close()
+        
+        else:
+            # One-time ingestion mode
+            start_time = datetime.now()
+            
+            results = await pipeline.ingest_documents(progress_callback)
+            
+            end_time = datetime.now()
+            total_time = (end_time - start_time).total_seconds()
+            
+            # Print summary
+            print("\n" + "="*50)
+            print("INGESTION SUMMARY")
+            print("="*50)
+            print(f"Documents processed: {len(results)}")
+            print(f"Total chunks created: {sum(r.chunks_created for r in results)}")
+            print(f"Total entities extracted: {sum(r.entities_extracted for r in results)}")
+            print(f"Total graph episodes: {sum(r.relationships_created for r in results)}")
+            print(f"Total errors: {sum(len(r.errors) for r in results)}")
+            print(f"Total processing time: {total_time:.2f} seconds")
+            print()
+            
+            # Print individual results
+            for result in results:
+                status = "✓" if not result.errors else "✗"
+                print(f"{status} {result.title}: {result.chunks_created} chunks, {result.entities_extracted} entities")
+                
+                if result.errors:
+                    for error in result.errors:
+                        print(f"  Error: {error}")
         
     except KeyboardInterrupt:
         print("\nIngestion interrupted by user")
@@ -517,7 +818,8 @@ async def main():
         logger.error(f"Ingestion failed: {e}")
         raise
     finally:
-        await pipeline.close()
+        if not args.watch:  # Only close if not in watch mode (watch mode handles its own cleanup)
+            await pipeline.close()
 
 
 if __name__ == "__main__":

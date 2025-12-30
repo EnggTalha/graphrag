@@ -127,7 +127,10 @@ class AgenticRAGCLI:
         }
         
         try:
-            async with aiohttp.ClientSession() as session:
+            # Show thinking indicator
+            print(f"{Colors.YELLOW}💭 Thinking...{Colors.END}", end='', flush=True)
+            
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=300)) as session:
                 async with session.post(
                     f"{self.base_url}/chat/stream",
                     json=request_data,
@@ -136,13 +139,16 @@ class AgenticRAGCLI:
                     
                     if response.status != 200:
                         error_text = await response.text()
-                        print(f"{Colors.RED}✗ API Error ({response.status}): {error_text}{Colors.END}")
+                        print(f"\r{Colors.RED}✗ API Error ({response.status}): {error_text}{Colors.END}")
                         return
                     
-                    print(f"\n{Colors.BOLD}🤖 Assistant:{Colors.END}")
+                    # Clear thinking indicator
+                    print(f"\r{' ' * 20}\r", end='', flush=True)
+                    print(f"{Colors.BOLD}🤖 Assistant:{Colors.END}")
                     
                     tools_used = []
                     full_response = ""
+                    has_text = False
                     
                     async for line in response.content:
                         line = line.decode('utf-8').strip()
@@ -158,8 +164,10 @@ class AgenticRAGCLI:
                                 elif data.get('type') == 'text':
                                     # Stream text content
                                     content = data.get('content', '')
-                                    print(content, end='', flush=True)
-                                    full_response += content
+                                    if content:
+                                        print(content, end='', flush=True)
+                                        full_response += content
+                                        has_text = True
                                 
                                 elif data.get('type') == 'tools':
                                     # Store tools used information
@@ -180,7 +188,10 @@ class AgenticRAGCLI:
                                 continue
                     
                     # Print newline after response
-                    print()
+                    if has_text:
+                        print()
+                    else:
+                        print(f"{Colors.YELLOW}(No response generated){Colors.END}")
                     
                     # Display tools used
                     if tools_used:
@@ -189,10 +200,12 @@ class AgenticRAGCLI:
                     # Print separator
                     print(f"{Colors.BLUE}{'─' * 60}{Colors.END}")
         
+        except asyncio.TimeoutError:
+            print(f"\r{Colors.RED}✗ Request timeout (took too long){Colors.END}")
         except aiohttp.ClientError as e:
-            print(f"{Colors.RED}✗ Connection error: {e}{Colors.END}")
+            print(f"\r{Colors.RED}✗ Connection error: {e}{Colors.END}")
         except Exception as e:
-            print(f"{Colors.RED}✗ Unexpected error: {e}{Colors.END}")
+            print(f"\r{Colors.RED}✗ Unexpected error: {e}{Colors.END}")
     
     async def run(self):
         """Run the CLI main loop."""

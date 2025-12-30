@@ -1,6 +1,6 @@
 """
 File parsers for various document formats.
-Supports: .txt, .md, .pdf, .xls, .xlsx, .csv
+Supports: .txt, .md, .pdf, .xls, .xlsx, .csv, .doc, .docx
 """
 
 import logging
@@ -148,6 +148,120 @@ def parse_csv_file(file_path: str) -> str:
         raise
 
 
+def parse_word_file(file_path: str) -> str:
+    """
+    Parse Word document (.docx) and extract text.
+    
+    Args:
+        file_path: Path to the Word document
+    
+    Returns:
+        Extracted text content
+    """
+    try:
+        from docx import Document
+        
+        doc = Document(file_path)
+        text_content = []
+        
+        # Extract paragraphs
+        for para in doc.paragraphs:
+            if para.text.strip():
+                text_content.append(para.text)
+        
+        # Extract tables
+        for table_num, table in enumerate(doc.tables, 1):
+            text_content.append(f"\n--- Table {table_num} ---\n")
+            for row in table.rows:
+                row_text = []
+                for cell in row.cells:
+                    row_text.append(cell.text.strip())
+                text_content.append("\t".join(row_text))
+            text_content.append("")
+        
+        return "\n".join(text_content)
+    
+    except ImportError:
+        logger.error("python-docx not installed. Install with: pip install python-docx")
+        raise ImportError("Word document parsing requires python-docx. Install with: pip install python-docx")
+    except Exception as e:
+        logger.error(f"Failed to parse Word document {file_path}: {e}")
+        raise
+
+
+def parse_old_word_file(file_path: str) -> str:
+    """
+    Parse old Word document (.doc) and extract text.
+    Note: .doc files require additional libraries like antiword or LibreOffice.
+    This is a fallback that tries to extract what it can.
+    
+    Args:
+        file_path: Path to the .doc file
+    
+    Returns:
+        Extracted text content
+    """
+    try:
+        # Try using python-docx2txt or textract
+        try:
+            import docx2txt
+            return docx2txt.process(file_path)
+        except ImportError:
+            pass
+        
+        try:
+            import textract
+            return textract.process(file_path).decode('utf-8')
+        except ImportError:
+            pass
+        
+        # If neither is available, try antiword command (Linux)
+        import subprocess
+        try:
+            result = subprocess.run(
+                ['antiword', file_path],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            if result.returncode == 0:
+                return result.stdout
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+        
+        # Last resort: try LibreOffice conversion
+        try:
+            import subprocess
+            import tempfile
+            import os
+            
+            with tempfile.TemporaryDirectory() as tmpdir:
+                output_file = os.path.join(tmpdir, 'converted.txt')
+                result = subprocess.run(
+                    ['libreoffice', '--headless', '--convert-to', 'txt', '--outdir', tmpdir, file_path],
+                    capture_output=True,
+                    timeout=60
+                )
+                if result.returncode == 0 and os.path.exists(output_file):
+                    with open(output_file, 'r', encoding='utf-8') as f:
+                        return f.read()
+        except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
+            pass
+        
+        raise ImportError(
+            "No suitable library found for .doc files. Options:\n"
+            "1. Install python-docx2txt: pip install docx2txt\n"
+            "2. Install textract: pip install textract\n"
+            "3. Install antiword (Linux): sudo apt-get install antiword\n"
+            "4. Install LibreOffice: sudo apt-get install libreoffice\n"
+            "5. Convert .doc to .docx manually"
+        )
+    
+    except Exception as e:
+        logger.error(f"Failed to parse old Word document {file_path}: {e}")
+        raise
+
+
 def parse_document(file_path: str) -> tuple[str, Dict[str, Any]]:
     """
     Parse document based on file extension.
@@ -188,6 +302,14 @@ def parse_document(file_path: str) -> tuple[str, Dict[str, Any]]:
             content = parse_csv_file(file_path)
             metadata["file_type"] = "csv"
         
+        elif extension == '.docx':
+            content = parse_word_file(file_path)
+            metadata["file_type"] = "word"
+        
+        elif extension == '.doc':
+            content = parse_old_word_file(file_path)
+            metadata["file_type"] = "word"
+        
         else:
             logger.warning(f"Unsupported file type: {extension}")
             raise ValueError(f"Unsupported file type: {extension}")
@@ -204,7 +326,7 @@ def parse_document(file_path: str) -> tuple[str, Dict[str, Any]]:
 
 def get_supported_extensions() -> list:
     """Get list of supported file extensions."""
-    return ['.txt', '.text', '.md', '.markdown', '.pdf', '.xls', '.xlsx', '.csv']
+    return ['.txt', '.text', '.md', '.markdown', '.pdf', '.xls', '.xlsx', '.csv', '.doc', '.docx']
 
 
 def is_supported_file(file_path: str) -> bool:

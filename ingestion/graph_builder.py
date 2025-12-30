@@ -77,27 +77,39 @@ class GraphBuilder:
         if not chunks:
             return {"episodes_created": 0, "errors": []}
         
-        logger.info(f"Adding {len(chunks)} chunks to knowledge graph for document: {document_title}")
-        logger.info("⚠️ Large chunks will be truncated to avoid Graphiti token limits.")
+        logger.info(f"   📊 Graph Building Statistics:")
+        logger.info(f"      • Total chunks: {len(chunks)}")
+        logger.info(f"      • Document: {document_title}")
+        logger.info(f"      • Source: {document_source}")
         
         # Check for oversized chunks and warn
         oversized_chunks = [i for i, chunk in enumerate(chunks) if len(chunk.content) > 6000]
         if oversized_chunks:
-            logger.warning(f"Found {len(oversized_chunks)} chunks over 6000 chars that will be truncated: {oversized_chunks}")
+            logger.warning(f"      ⚠️  Found {len(oversized_chunks)} chunks over 6000 chars (will be truncated)")
+            logger.info(f"      ℹ️  Large chunks will be truncated to avoid Graphiti token limits")
         
         episodes_created = 0
         errors = []
         
 
         # For very large documents, limit graph building to avoid extremely long processing
-        max_chunks_for_graph = 1000  # Limit to first 1000 chunks for large documents
+        # For Excel/tabular data, skip graph building entirely (too many similar chunks)
+        if document_metadata and document_metadata.get("file_type") == "excel":
+            logger.info(f"   📊 Excel file detected")
+            logger.info(f"   ⚠️  Skipping graph building (tabular data not ideal for knowledge graph)")
+            logger.info(f"   ✅ Data will be stored in vector DB for semantic search")
+            return {"episodes_created": 0, "total_chunks": len(chunks), "errors": ["Skipped: Excel/tabular data"]}
+        
+        max_chunks_for_graph = 500  # Reduced from 1000 to 500 for faster processing
         chunks_to_process = chunks[:max_chunks_for_graph] if len(chunks) > max_chunks_for_graph else chunks
         
         if len(chunks) > max_chunks_for_graph:
-            logger.warning(f"Document has {len(chunks)} chunks. Limiting graph building to first {max_chunks_for_graph} chunks to avoid excessive processing time.")
-            logger.warning(f"Remaining {len(chunks) - max_chunks_for_graph} chunks will be stored in vector DB but not added to knowledge graph.")
+            logger.warning(f"   ⚠️  Document has {len(chunks)} chunks (very large)")
+            logger.info(f"   📉 Limiting graph building to first {max_chunks_for_graph} chunks")
+            logger.info(f"   ℹ️  Remaining {len(chunks) - max_chunks_for_graph} chunks will be in vector DB only")
         
         # Process chunks one by one to avoid overwhelming Graphiti
+        start_time = datetime.now()
         for i, chunk in enumerate(chunks_to_process):
             try:
                 # Create episode ID
@@ -113,36 +125,47 @@ class GraphBuilder:
                 # Create source description (shorter)
                 source_description = f"Document: {document_title} (Chunk: {chunk.index})"
                 
-                # Add episode to graph
-                await self.graph_client.add_episode(
-                    episode_id=episode_id,
-                    content=episode_content,
-                    source=source_description,
-                    timestamp=datetime.now(timezone.utc),
-                    metadata={
-                        "document_title": document_title,
-                        "document_source": document_source,
-                        "chunk_index": chunk.index,
-                        "original_length": len(chunk.content),
-                        "processed_length": len(episode_content)
-                    }
-                )
+                # Add episode to graph with timeout (60 seconds per episode)
+                try:
+                    await asyncio.wait_for(
+                        self.graph_client.add_episode(
+                            episode_id=episode_id,
+                            content=episode_content,
+                            source=source_description,
+                            timestamp=datetime.now(timezone.utc),
+                            metadata={
+                                "document_title": document_title,
+                                "document_source": document_source,
+                                "chunk_index": chunk.index,
+                                "original_length": len(chunk.content),
+                                "processed_length": len(episode_content)
+                            }
+                        ),
+                        timeout=60.0  # 60 second timeout per episode
+                    )
+                    episodes_created += 1
+                except asyncio.TimeoutError:
+                    error_msg = f"Timeout adding chunk {chunk.index} to graph (exceeded 60s)"
+                    logger.warning(error_msg)
+                    errors.append(error_msg)
+                    # Continue with next chunk
+                    continue
                 
-                episodes_created += 1
+                # Progress logging every 10 chunks or at milestones
+                if episodes_created % 10 == 0 or episodes_created == len(chunks_to_process):
+                    elapsed = (datetime.now() - start_time).total_seconds()
+                    rate = episodes_created / elapsed if elapsed > 0 else 0
+                    remaining = (len(chunks_to_process) - episodes_created) / rate if rate > 0 else 0
+                    logger.info(f"   Graph progress: {episodes_created}/{len(chunks_to_process)} ({episodes_created*100//len(chunks_to_process)}%) | "
+                              f"Rate: {rate:.1f} chunks/s | Est. remaining: {remaining:.0f}s")
                 
-                # Progress logging every 50 chunks or at milestones
-                if episodes_created % 50 == 0 or episodes_created == len(chunks_to_process):
-                    logger.info(f"Graph building progress: {episodes_created}/{len(chunks_to_process)} episodes added ({episodes_created*100//len(chunks_to_process)}%)")
-                elif episodes_created % 10 == 0:
-                    logger.debug(f"Added episode {episodes_created}/{len(chunks_to_process)}")
-                
-                # Small delay between each episode to reduce API pressure (reduced for faster processing)
+                # Small delay between each episode to reduce API pressure
                 if i < len(chunks_to_process) - 1:
-                    await asyncio.sleep(0.2)  # Reduced from 0.5 to 0.2 seconds
+                    await asyncio.sleep(0.1)  # Reduced to 0.1 seconds for faster processing
                     
             except Exception as e:
                 error_msg = f"Failed to add chunk {chunk.index} to graph: {str(e)}"
-                logger.error(error_msg)
+                logger.warning(error_msg)
                 errors.append(error_msg)
                 
                 # Continue processing other chunks even if one fails

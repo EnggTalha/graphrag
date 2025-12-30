@@ -273,6 +273,12 @@ pip install --upgrade pip
 # Install all required packages
 pip install -r requirements.txt
 
+# This includes:
+# - pdfplumber (for PDF)
+# - pandas, openpyxl (for Excel)
+# - python-docx (for Word documents)
+# - watchdog (for file watching)
+
 # This may take a few minutes
 ```
 
@@ -341,8 +347,9 @@ ls -la data/
 
 The ingestion pipeline supports these formats (no conversion needed!):
 - ✅ `.txt` - Plain text files
-- ✅ `.md` - Markdown files
+- ✅ `.md`, `.markdown` - Markdown files
 - ✅ `.pdf` - PDF files (automatically parsed)
+- ✅ `.doc`, `.docx` - Word documents (automatically parsed)
 - ✅ `.xls`, `.xlsx` - Excel files (automatically parsed)
 - ✅ `.csv` - CSV files
 

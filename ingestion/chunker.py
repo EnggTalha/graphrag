@@ -7,6 +7,7 @@ import re
 import logging
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
+from datetime import datetime
 import asyncio
 
 from dotenv import load_dotenv
@@ -108,22 +109,49 @@ class SemanticChunker:
             **(metadata or {})
         }
         
+        # Check if content is tabular data (Excel, CSV) - use simple chunking
+        if self._is_tabular_data(content):
+            logger.info("   📊 Detected tabular data (Excel/CSV), using fast simple chunking")
+            logger.info(f"   ⚡ This will be much faster than semantic chunking")
+            return self._simple_chunk(content, base_metadata)
+        
         # First, try semantic chunking if enabled
         # Skip semantic chunking for very large documents (>500KB) to avoid timeouts
         max_size_for_semantic = 500000  # 500KB
+        
+        if len(content) >= max_size_for_semantic:
+            logger.info(f"   ⚠️  Document is very large ({len(content):,} chars)")
+            logger.info(f"   ⚡ Using simple chunking for faster processing (semantic chunking skipped)")
+            return self._simple_chunk(content, base_metadata)
+        
         if self.config.use_semantic_splitting and len(content) > self.config.chunk_size and len(content) < max_size_for_semantic:
+            logger.info(f"   🧠 Using semantic chunking (intelligent splitting)...")
+            logger.info(f"   ⏱️  Timeout: 60 seconds (will fallback to simple if timeout)")
             try:
-                semantic_chunks = await self._semantic_chunk(content)
+                # Add timeout to semantic chunking
+                import asyncio
+                chunk_start = datetime.now()
+                semantic_chunks = await asyncio.wait_for(
+                    self._semantic_chunk(content),
+                    timeout=60.0  # 60 second timeout
+                )
+                chunk_time = (datetime.now() - chunk_start).total_seconds()
+                
                 if semantic_chunks:
+                    logger.info(f"   ✅ Semantic chunking completed ({len(semantic_chunks)} chunks in {chunk_time:.1f}s)")
                     return self._create_chunk_objects(
                         semantic_chunks,
                         content,
                         base_metadata
                     )
+                else:
+                    logger.warning(f"   ⚠️  Semantic chunking returned no chunks, using simple chunking")
+            except asyncio.TimeoutError:
+                logger.warning(f"   ⚠️  Semantic chunking timed out after 60s")
+                logger.info(f"   ⚡ Falling back to simple chunking...")
             except Exception as e:
-                logger.warning(f"Semantic chunking failed, falling back to simple chunking: {e}")
-        elif len(content) >= max_size_for_semantic:
-            logger.info(f"Document is very large ({len(content)} chars). Using simple chunking for faster processing.")
+                logger.warning(f"   ⚠️  Semantic chunking failed: {type(e).__name__}: {e}")
+                logger.info(f"   ⚡ Falling back to simple chunking...")
         
         # Fallback to rule-based chunking
         return self._simple_chunk(content, base_metadata)
@@ -203,6 +231,38 @@ class SemanticChunker:
         
         return sections
     
+    def _is_tabular_data(self, text: str) -> bool:
+        """
+        Detect if text is tabular data (Excel, CSV-like).
+        
+        Args:
+            text: Text to check
+        
+        Returns:
+            True if appears to be tabular data
+        """
+        # Check for tab-separated values (common in Excel exports)
+        lines = text.split('\n')[:10]  # Check first 10 lines
+        if len(lines) < 2:
+            return False
+        
+        # Count tabs in first few lines
+        tab_counts = [line.count('\t') for line in lines if line.strip()]
+        if not tab_counts:
+            return False
+        
+        # If most lines have similar tab counts, it's likely tabular
+        avg_tabs = sum(tab_counts) / len(tab_counts)
+        if avg_tabs >= 3:  # At least 3 tabs per line
+            return True
+        
+        # Check for CSV-like patterns (commas with consistent structure)
+        comma_counts = [line.count(',') for line in lines if line.strip()]
+        if comma_counts and sum(comma_counts) / len(comma_counts) >= 3:
+            return True
+        
+        return False
+    
     async def _split_long_section(self, section: str) -> List[str]:
         """
         Split a long section using LLM for semantic boundaries.
@@ -213,6 +273,18 @@ class SemanticChunker:
         Returns:
             List of sub-chunks
         """
+        # For tabular data, use simple splitting (much faster)
+        if self._is_tabular_data(section):
+            logger.debug(f"      Tabular data detected in section, using simple split")
+            return self._simple_split(section)
+        
+        # Limit content size sent to LLM (max 20KB to avoid timeouts)
+        max_llm_content_size = 20000
+        if len(section) > max_llm_content_size:
+            logger.warning(f"      ⚠️  Section too large ({len(section):,} chars) for LLM")
+            logger.info(f"      ⚡ Using simple chunking instead")
+            return self._simple_split(section)
+        
         try:
             prompt = f"""
             Split the following text into semantically coherent chunks. Each chunk should:
@@ -227,24 +299,36 @@ class SemanticChunker:
             {section}
             """
             
-            # Use Pydantic AI for LLM calls
+            # Use Pydantic AI for LLM calls with timeout
             from pydantic_ai import Agent
+            import asyncio
+            
             temp_agent = Agent(self.model)
             
-            response = await temp_agent.run(prompt)
-            result = response.data
-            chunks = [chunk.strip() for chunk in result.split("---CHUNK---")]
-            
-            # Validate chunks
-            valid_chunks = []
-            for chunk in chunks:
-                if (self.config.min_chunk_size <= len(chunk) <= self.config.max_chunk_size):
-                    valid_chunks.append(chunk)
-            
-            return valid_chunks if valid_chunks else self._simple_split(section)
+            # Add timeout to prevent hanging (30 seconds)
+            try:
+                response = await asyncio.wait_for(
+                    temp_agent.run(prompt),
+                    timeout=30.0
+                )
+                result = response.data
+                chunks = [chunk.strip() for chunk in result.split("---CHUNK---")]
+                
+                # Validate chunks
+                valid_chunks = []
+                for chunk in chunks:
+                    if (self.config.min_chunk_size <= len(chunk) <= self.config.max_chunk_size):
+                        valid_chunks.append(chunk)
+                
+                return valid_chunks if valid_chunks else self._simple_split(section)
+            except asyncio.TimeoutError:
+                logger.warning(f"      ⚠️  LLM chunking timed out after 30s")
+                logger.info(f"      ⚡ Using simple chunking")
+                return self._simple_split(section)
             
         except Exception as e:
-            logger.error(f"LLM chunking failed: {e}")
+            logger.warning(f"      ⚠️  LLM chunking failed: {type(e).__name__}: {e}")
+            logger.info(f"      ⚡ Using simple chunking")
             return self._simple_split(section)
     
     def _simple_split(self, text: str) -> List[str]:
