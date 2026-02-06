@@ -113,6 +113,7 @@ class ChatResponse(BaseModel):
     session_id: str
     sources: List[DocumentMetadata] = Field(default_factory=list)
     tools_used: List[ToolCall] = Field(default_factory=list)
+    assistant_message_id: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 

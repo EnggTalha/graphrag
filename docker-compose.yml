@@ -5,7 +5,7 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: agentic_rag
+      POSTGRES_DB: LAW_RAG_DB
     ports:
       - "5432:5432"
     volumes:

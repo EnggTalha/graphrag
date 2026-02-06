@@ -16,6 +16,7 @@ import sys
 
 import asyncpg
 from dotenv import load_dotenv
+from sentence_transformers import SentenceTransformer
 
 # File watching
 try:
@@ -30,6 +31,7 @@ from .chunker import ChunkingConfig, create_chunker, DocumentChunk
 from .embedder import create_embedder
 from .graph_builder import create_graph_builder
 from .file_parsers import parse_document, is_supported_file, get_supported_extensions
+from .compliance_processor import get_compliance_processor
 
 # Import agent utilities
 try:
@@ -47,6 +49,9 @@ except ImportError:
 
 # Load environment variables
 load_dotenv()
+
+# Initialize SentenceTransformer model
+embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +88,7 @@ class DocumentIngestionPipeline:
         self.chunker = create_chunker(self.chunker_config)
         self.embedder = create_embedder()
         self.graph_builder = create_graph_builder()
+        self.compliance_processor = get_compliance_processor()
         
         self._initialized = False
     
@@ -504,12 +510,15 @@ class DocumentIngestionPipeline:
         return os.path.splitext(os.path.basename(file_path))[0]
     
     def _extract_document_metadata(self, content: str, file_path: str) -> Dict[str, Any]:
-        """Extract metadata from document content."""
-        metadata = {
-            "file_path": file_path,
-            "file_size": len(content),
-            "ingestion_date": datetime.now().isoformat()
-        }
+        """Extract metadata from document content with compliance law processing."""
+        # Start with compliance processor metadata
+        source_path = os.path.relpath(file_path, self.documents_folder)
+        metadata = self.compliance_processor.extract_metadata(content, source_path)
+        
+        # Add basic metrics
+        metadata['file_path'] = file_path
+        metadata['file_size'] = len(content)
+        metadata['ingestion_date'] = datetime.now().isoformat()
         
         # Try to extract YAML frontmatter
         if content.startswith('---'):
@@ -526,7 +535,7 @@ class DocumentIngestionPipeline:
             except Exception as e:
                 logger.warning(f"Failed to parse frontmatter: {e}")
         
-        # Extract some basic metadata from content
+        # Extract content metrics
         lines = content.split('\n')
         metadata['line_count'] = len(lines)
         metadata['word_count'] = len(content.split())

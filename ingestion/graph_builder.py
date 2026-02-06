@@ -9,33 +9,30 @@ from datetime import datetime, timezone
 import asyncio
 import re
 
-from graphiti_core import Graphiti
 from dotenv import load_dotenv
+from sentence_transformers import SentenceTransformer
 
 from .chunker import DocumentChunk
 
 # Import graph utilities
-try:
-    from ..agent.graph_utils import GraphitiClient
-except ImportError:
-    # For direct execution or testing
-    import sys
-    import os
-    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from agent.graph_utils import GraphitiClient
+from agent.graph_utils import Neo4jGraphClient
 
 # Load environment variables
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+# Initialize SentenceTransformer model
+embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+
 
 class GraphBuilder:
-    """Builds knowledge graph from document chunks."""
+    """Builds knowledge graph from document chunks using SentenceTransformer."""
     
     def __init__(self):
         """Initialize graph builder."""
-        self.graph_client = GraphitiClient()
+        self.graph_client = Neo4jGraphClient()
+        self.embedding_model = embedding_model
         self._initialized = False
     
     async def initialize(self):

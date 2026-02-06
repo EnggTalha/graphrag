@@ -10,6 +10,7 @@ import asyncio
 
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
+from .providers import get_embedding_client, get_embedding_model
 
 from .db_utils import (
     vector_search,
@@ -31,27 +32,25 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# Initialize embedding client with flexible provider
-embedding_client = get_embedding_client()
+# Initialize embedding client lazy (actual model is loaded on first use)
 EMBEDDING_MODEL = get_embedding_model()
 
 
 async def generate_embedding(text: str) -> List[float]:
     """
-    Generate embedding for text using OpenAI.
-    
+    Generate embedding for text using SentenceTransformer.
+
     Args:
         text: Text to embed
-    
+
     Returns:
         Embedding vector
     """
     try:
-        response = await embedding_client.embeddings.create(
-            model=EMBEDDING_MODEL,
-            input=text
-        )
-        return response.data[0].embedding
+        client = get_embedding_client()
+        # SentenceTransformer.encode is blocking/CPU-bound; offload to thread
+        embedding = await asyncio.to_thread(client.encode, text)
+        return embedding.tolist() if hasattr(embedding, 'tolist') else list(embedding)
     except Exception as e:
         logger.error(f"Failed to generate embedding: {e}")
         raise
@@ -382,3 +381,40 @@ async def perform_comprehensive_search(
     results["total_results"] = len(results["vector_results"]) + len(results["graph_results"])
     
     return results
+
+
+class FixParseInput(BaseModel):
+    """Input for FIX message parser."""
+    message: str = Field(..., description="FIX protocol message string to decode")
+    
+
+async def fix_parser_tool(input_data: FixParseInput) -> str:
+    """
+    Parse and decode FIX protocol messages.
+    
+    Provides detailed explanation of FIX message structure, tags, and meaning.
+    FIX = Financial Information eXchange - standard for securities transaction messaging.
+    
+    Args:
+        input_data: Contains FIX message string to parse
+        
+    Returns:
+        Detailed explanation of the FIX message
+    """
+    try:
+        from .fix_parser import explain_fix_message, is_fix_message
+        
+        message = input_data.message.strip()
+        
+        # Check if it's a valid FIX message
+        if not is_fix_message(message):
+            return f"Error: This doesn't appear to be a valid FIX message. Expected format like '8=FIX.4.4^9=100^35=D^...' where ^ is the delimiter."
+        
+        # Parse and explain
+        explanation = explain_fix_message(message)
+        logger.info(f"Decoded FIX message type: {message[:50]}...")
+        return explanation
+        
+    except Exception as e:
+        logger.error(f"FIX parser error: {e}")
+        return f"Error parsing FIX message: {str(e)}"

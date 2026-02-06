@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from dotenv import load_dotenv
+from sentence_transformers import SentenceTransformer
 
 # File watching
 try:
@@ -43,6 +44,9 @@ logging.basicConfig(
 # Reduce Neo4j verbosity
 logging.getLogger("neo4j").setLevel(logging.WARNING)
 logging.getLogger("neo4j.io").setLevel(logging.WARNING)
+
+# Initialize SentenceTransformer model
+embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
 
 # FastAPI app
 app = FastAPI(
@@ -370,21 +374,13 @@ async def stop_watch():
 
 @app.post("/ingest/file")
 async def ingest_file(file_path: str, background_tasks: BackgroundTasks):
-    """Manually trigger ingestion of a specific file."""
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
-    
-    if file_path in processing_files:
-        raise HTTPException(status_code=409, detail="File is already being processed")
-    
-    # Add to queue
-    await ingestion_queue.put(("manual", file_path))
-    
-    return {
-        "status": "queued",
-        "file": file_path,
-        "queue_position": ingestion_queue.qsize()
-    }
+    """
+    Ingest a single file using SentenceTransformer for embeddings.
+    """
+    content = open(file_path, 'r').read()
+    embedding = embedding_model.encode(content).tolist()
+    # Save embedding to database or graph logic here
+    return {"status": "success", "embedding": embedding}
 
 
 @app.post("/ingest/folder")

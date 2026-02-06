@@ -1,0 +1,1014 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LawGPT - Securities & Financial Law Assistant</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-0.5rem); }
+        }
+        .animate-bounce {
+            animation: bounce 1s infinite;
+        }
+        .animate-bounce:nth-child(2) {
+            animation-delay: 0.15s;
+        }
+        .animate-bounce:nth-child(3) {
+            animation-delay: 0.3s;
+        }
+        #messageContainer {
+            scroll-behavior: smooth;
+        }
+        textarea {
+            field-sizing: content;
+        }
+        
+        /* Responsive message styling */
+        .message-content {
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+        }
+        
+        /* Table styling for FIX protocol messages */
+        .message-content table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 0.75rem 0;
+            font-size: 0.75rem;
+            overflow-x: auto;
+            display: block;
+        }
+        .message-content table thead {
+            background-color: #f3f4f6;
+        }
+        .message-content table th,
+        .message-content table td {
+            border: 1px solid #e5e7eb;
+            padding: 0.5rem 0.75rem;
+            text-align: left;
+            white-space: nowrap;
+        }
+        .message-content table th {
+            font-weight: 600;
+            background-color: #f9fafb;
+        }
+        .message-content table tr:nth-child(even) {
+            background-color: #f9fafb;
+        }
+        .message-content table tr:hover {
+            background-color: #f3f4f6;
+        }
+        
+        /* Code block styling */
+        .message-content code {
+            background-color: #f3f4f6;
+            padding: 0.125rem 0.375rem;
+            border-radius: 0.25rem;
+            font-family: 'Courier New', monospace;
+            font-size: 0.8em;
+            word-break: break-all;
+        }
+        .message-content pre {
+            background-color: #1f2937;
+            color: #f9fafb;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            overflow-x: auto;
+            margin: 0.75rem 0;
+            font-size: 0.75rem;
+        }
+        .message-content pre code {
+            background: none;
+            padding: 0;
+            color: inherit;
+        }
+        
+        /* Responsive tables on mobile */
+        @media (max-width: 640px) {
+            .message-content table {
+                font-size: 0.65rem;
+            }
+            .message-content table th,
+            .message-content table td {
+                padding: 0.25rem 0.5rem;
+            }
+        }
+        
+        /* Status indicators */
+        .status-valid { color: #16a34a; }
+        .status-warning { color: #d97706; }
+        .status-invalid { color: #dc2626; }
+        
+        /* Horizontal rule */
+        .message-content hr {
+            border: none;
+            border-top: 1px solid #e5e7eb;
+            margin: 1rem 0;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div class="flex h-screen">
+        <!-- Sidebar -->
+        <div id="sidebar" class="fixed lg:relative -translate-x-full lg:translate-x-0 z-40 w-64 h-full bg-gray-900 text-white transition-transform duration-300">
+            <div class="flex flex-col h-full">
+                <!-- Sidebar Header -->
+                <div class="p-4 border-b border-gray-700">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 2l8 4.5v9L12 20l-8-4.5v-9L12 2z"/>
+                            </svg>
+                        </div>
+                        <div>
+                            <h1 class="font-bold text-sm">Compliance Assistant</h1>
+                            <p class="text-xs text-gray-400">Compliance Assistant</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Sidebar Content -->
+                <div class="flex-1 overflow-y-auto p-4">
+                    <button onclick="newChat()" class="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-800 transition-colors mb-4 bg-gray-800">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                        </svg>
+                        <span class="text-sm font-medium">New Chat</span>
+                    </button>
+                    
+                    <!-- Sessions List -->
+                    <div id="sessionsList" class="space-y-1">
+                        <!-- Sessions will be loaded here -->
+                    </div>
+                </div>
+
+                <!-- Sidebar Footer -->
+                <div class="p-4 border-t border-gray-700 space-y-2">
+                    <button onclick="clearHistory()" class="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-gray-800 transition-colors">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                        </svg>
+                        <span class="text-sm">Clear History</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Overlay -->
+        <div id="overlay" class="hidden fixed inset-0 bg-black bg-opacity-50 z-30 lg:hidden" onclick="toggleSidebar()"></div>
+
+        <!-- Main Content -->
+        <div class="flex-1 flex flex-col h-screen">
+            <!-- Header -->
+            <header class="bg-white border-b border-gray-200 px-4 py-3 flex items-center gap-3">
+                <button onclick="toggleSidebar()" class="lg:hidden p-2 hover:bg-gray-100 rounded-lg">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+                    </svg>
+                </button>
+                <div class="flex items-center gap-2 flex-1">
+                    <div class="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
+                        <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 2l8 4.5v9L12 20l-8-4.5v-9L12 2z"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h2 class="font-semibold text-sm">ComplianceGPT</h2>
+                        <p class="text-xs text-gray-500" id="statusText">Connecting...</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <label class="text-xs text-gray-600 font-medium hidden sm:block">User ID:</label>
+                    <input 
+                        type="text" 
+                        id="userIdInput" 
+                        value="user_001" 
+                        class="px-3 py-1 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 w-24"
+                    />
+                </div>
+            </header>
+
+            <!-- Messages Container -->
+            <div id="messageContainer" class="flex-1 overflow-y-auto">
+                <div class="max-w-4xl mx-auto px-4 py-8" id="messagesArea">
+                    <!-- Messages will be added here -->
+                </div>
+            </div>
+
+            <!-- Input Area -->
+            <div class="bg-white border-t border-gray-200 px-4 py-4">
+                <div class="max-w-4xl mx-auto">
+                    <div class="flex gap-3 items-end">
+                        <div class="flex-1 relative">
+                            <textarea
+                                id="messageInput"
+                                placeholder="Ask about securities law, FINRA rules, SEC regulations..."
+                                rows="1"
+                                class="w-full px-4 py-3 border border-gray-300 rounded-xl resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                                style="min-height: 44px; max-height: 200px;"
+                            ></textarea>
+                        </div>
+                        <button
+                            id="sendButton"
+                            onclick="sendMessage()"
+                            class="p-3 rounded-xl transition-all bg-gray-200 text-gray-400"
+                            disabled
+                        >
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <p class="text-xs text-gray-500 text-center mt-2">
+                        LawGPT provides information, not legal advice. Verify important details.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let messages = [];
+        let isTyping = false;
+        let isInitialized = false;
+        let currentSessionId = null;
+        // Use same origin when served by FastAPI, otherwise fallback to port 8005
+        const API_BASE_URL = window.location.origin || 'http://localhost:8005';
+
+        // Initialize
+        async function init() {
+            await checkAPIConnection();
+            await loadSessions();
+            await initializeChat();
+        }
+        
+        // Load sessions list
+        async function loadSessions() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/sessions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: getUserId() })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    renderSessions(data.sessions || []);
+                }
+            } catch (error) {
+                console.error('Load sessions error:', error);
+            }
+        }
+        
+        // Render sessions in sidebar
+        function renderSessions(sessions) {
+            const sessionsList = document.getElementById('sessionsList');
+            sessionsList.innerHTML = '';
+            
+            if (sessions.length === 0) {
+                sessionsList.innerHTML = '<p class="text-xs text-gray-500 text-center py-4">No previous chats</p>';
+                return;
+            }
+            
+            sessions.forEach(session => {
+                const sessionDiv = document.createElement('div');
+                sessionDiv.className = `group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-colors ${
+                    currentSessionId === session.session_id ? 'bg-gray-800' : 'hover:bg-gray-800'
+                }`;
+                
+                const title = session.title || 'New Chat';
+                const truncatedTitle = title.length > 30 ? title.substring(0, 30) + '...' : title;
+                
+                // Create icon
+                const icon = document.createElement('div');
+                icon.innerHTML = `
+                    <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+                    </svg>
+                `;
+                
+                // Create title span
+                const titleSpan = document.createElement('span');
+                titleSpan.className = 'text-sm flex-1 truncate';
+                titleSpan.textContent = truncatedTitle;
+                titleSpan.title = title;
+                
+                // Create delete button
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-700 rounded transition-opacity flex-shrink-0';
+                deleteBtn.title = 'Delete session';
+                deleteBtn.innerHTML = `
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z"/>
+                    </svg>
+                `;
+                deleteBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    deleteSession(session.session_id);
+                });
+                
+                // Assemble
+                sessionDiv.appendChild(icon.firstElementChild || icon);
+                sessionDiv.appendChild(titleSpan);
+                sessionDiv.appendChild(deleteBtn);
+                
+                // Add click handler for the whole div (except the delete button)
+                sessionDiv.addEventListener('click', (e) => {
+                    if (e.target !== deleteBtn && !deleteBtn.contains(e.target)) {
+                        switchSession(session.session_id);
+                    }
+                });
+                
+                sessionsList.appendChild(sessionDiv);
+            });
+        }
+        
+        // Delete a session
+        async function deleteSession(sessionId) {
+            if (!confirm('Are you sure you want to delete this session?')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/delete_chats`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: getUserId(),
+                        session_id: sessionId
+                    })
+                });
+                
+                if (response.ok) {
+                    // If deleted session was current, switch to new session
+                    if (currentSessionId === sessionId) {
+                        currentSessionId = null;
+                        messages = [];
+                        isInitialized = false;
+                    }
+                    // Reload sessions list
+                    await loadSessions();
+                    // If we deleted the current session, initialize a new one
+                    if (currentSessionId === sessionId || !currentSessionId) {
+                        await initializeChat();
+                    }
+                }
+            } catch (error) {
+                console.error('Delete session error:', error);
+                alert('Failed to delete session. Please try again.');
+            }
+        }
+        
+        // Switch to a different session
+        async function switchSession(sessionId) {
+            currentSessionId = sessionId;
+            messages = [];
+            isInitialized = false;
+            await loadSessions(); // Refresh to highlight active session
+            await initializeChat();
+        }
+
+        // Get user ID
+        function getUserId() {
+            return document.getElementById('userIdInput').value.trim() || 'user_001';
+        }
+
+        // Check API connection
+        async function checkAPIConnection() {
+            const statusText = document.getElementById('statusText');
+            try {
+                const response = await fetch(`${API_BASE_URL}/health`);
+                if (response.ok) {
+                    const data = await response.json();
+                    statusText.textContent = `API Status: ${data.status}`;
+                } else {
+                    statusText.textContent = 'API Status: Unreachable';
+                }
+            } catch (error) {
+                console.error('API connection error:', error);
+                statusText.textContent = 'API Status: Error';
+            }
+        }
+
+        // Initialize chat with greeting
+        async function initializeChat() {
+            if (isInitialized && currentSessionId) return;
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/init_chat`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: getUserId(),
+                        session_id: currentSessionId
+                    })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    currentSessionId = data.session_id || currentSessionId;
+                    
+                    if (data.greeting) {
+                        const greetingId = data.greeting_id || `msg_${Date.now()}`;
+                        messages = [{"role": "assistant", "content": data.greeting, "message_id": greetingId, "timestamp": new Date()}];
+                        renderMessages();
+                    } else if (data.chats && data.chats.length > 0) {
+                        // Load existing chat history
+                        messages = data.chats.map(msg => ({
+                            ...msg,
+                            message_id: msg.message_id || `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+                        }));
+                        renderMessages();
+                    }
+                    isInitialized = true;
+                }
+            } catch (error) {
+                console.error('Init error:', error);
+                // Fallback greeting
+                messages = [{"role": "assistant", "content": "Hi, welcome to LawGPT! 👋\n\nI'm your AI assistant specializing in securities and financial law. How may I assist you today?", "message_id": `msg_${Date.now()}`}];
+                renderMessages();
+                isInitialized = true;
+            }
+        }
+
+        // Toggle sidebar
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('overlay');
+            sidebar.classList.toggle('-translate-x-full');
+            overlay.classList.toggle('hidden');
+        }
+
+        // Add message
+        function addMessage(type, content) {
+            const message = {
+                role: type,
+                content: content,
+                timestamp: new Date()
+            };
+            messages.push(message);
+            renderMessages();
+        }
+
+        // Render messages with basic heading + bullet formatting for assistant
+        function renderMessages() {
+            const messagesArea = document.getElementById('messagesArea');
+            messagesArea.innerHTML = '';
+
+            messages.forEach(message => {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `flex gap-4 mb-8 ${message.role === 'user' ? 'justify-end' : 'justify-start'}`;
+
+                const time = message.timestamp ? new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+
+                if (message.role === 'assistant') {
+                    const formatted = formatAssistantMessage(message.content);
+                    const messageId = message.message_id || `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                    messageDiv.innerHTML = `
+                        <div class="flex-shrink-0 w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
+                            <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 2l8 4.5v9L12 20l-8-4.5v-9L12 2z"/>
+                            </svg>
+                        </div>
+                        <div class="flex flex-col w-full max-w-[90%] sm:max-w-2xl lg:max-w-3xl">
+                            <div class="px-4 py-3 rounded-2xl bg-white border border-gray-200 shadow-sm overflow-hidden">
+                                ${formatted}
+                            </div>
+                            ${time ? `<span class="text-xs text-gray-500 mt-1 px-2">${time}</span>` : ''}
+                            <div class="flex items-center gap-3 mt-2 px-2" data-message-id="${messageId}">
+                                <button onclick="submitFeedback('${messageId}', 'like')" class="flex items-center gap-1 px-2 py-1 text-xs text-gray-600 hover:text-green-600 hover:bg-green-50 rounded transition-colors feedback-btn" data-type="like">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 10h4.764a2 2 0 011.789 2.894l-3.5 7A2 2 0 0115.263 21h-4.017c-.163 0-.326-.02-.485-.06L7 20m7-10V5a2 2 0 00-2-2h-.095c-.5 0-.905.405-.905.905 0 .714-.211 1.412-.608 2.006L7 11v9m7-10h-2M7 20H5a2 2 0 01-2-2v-6a2 2 0 012-2h2.5"/>
+                                    </svg>
+                                    <span>Like</span>
+                                </button>
+                                <button onclick="submitFeedback('${messageId}', 'dislike')" class="flex items-center gap-1 px-2 py-1 text-xs text-gray-600 hover:text-red-600 hover:bg-red-50 rounded transition-colors feedback-btn" data-type="dislike">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14H5.236a2 2 0 01-1.789-2.894l3.5-7A2 2 0 018.736 3h4.018a2 2 0 01.485.06l3.76.94m-7 10v5a2 2 0 002 2h.096c.5 0 .905-.405.905-.904 0-.715.211-1.413.608-2.008L17 13V4m-7 10h2m5-10h2a2 2 0 012 2v6a2 2 0 01-2 2h-2.5"/>
+                                    </svg>
+                                    <span>Dislike</span>
+                                </button>
+                                <button onclick="showCommentModal('${messageId}')" class="flex items-center gap-1 px-2 py-1 text-xs text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors feedback-btn" data-type="comment">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+                                    </svg>
+                                    <span>Comment</span>
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    messageDiv.innerHTML = `
+                        <div class="flex flex-col max-w-2xl items-end">
+                            <div class="px-4 py-3 rounded-2xl bg-blue-600 text-white shadow-sm">
+                                <p class="text-sm leading-relaxed whitespace-pre-wrap">${escapeHtml(message.content)}</p>
+                            </div>
+                            ${time ? `<span class="text-xs text-gray-500 mt-1 px-2">${time}</span>` : ''}
+                        </div>
+                        <div class="flex-shrink-0 w-8 h-8 bg-gray-700 rounded-lg flex items-center justify-center">
+                            <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+                            </svg>
+                        </div>
+                    `;
+                }
+
+                messagesArea.appendChild(messageDiv);
+            });
+
+            if (isTyping) {
+                const typingDiv = document.createElement('div');
+                typingDiv.className = 'flex gap-4 mb-8';
+                typingDiv.innerHTML = `
+                    <div class="flex-shrink-0 w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
+                        <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 2l8 4.5v9L12 20l-8-4.5v-9L12 2z"/>
+                        </svg>
+                    </div>
+                    <div class="bg-white border border-gray-200 px-4 py-3 rounded-2xl">
+                        <div class="flex gap-1">
+                            <div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                            <div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                            <div class="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                        </div>
+                    </div>
+                `;
+                messagesArea.appendChild(typingDiv);
+            }
+
+            scrollToBottom();
+        }
+
+        // Send message
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+
+            if (!message || isTyping) return;
+
+            addMessage('user', message);
+            input.value = '';
+            updateSendButton();
+
+            isTyping = true;
+            renderMessages();
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/chat`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        message,
+                        session_id: currentSessionId,
+                        user_id: getUserId()
+                    })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    // Use server-provided assistant message id when available so feedback binds correctly
+                    const assistantId = data.assistant_message_id || data.assistant_id || null;
+                    const assistantMsg = {
+                        role: 'assistant',
+                        content: data.message,
+                        timestamp: new Date()
+                    };
+                    if (assistantId) assistantMsg.message_id = assistantId;
+                    else assistantMsg.message_id = `msg_${Date.now()}_${Math.random().toString(36).substr(2,9)}`;
+
+                    messages.push(assistantMsg);
+                } else {
+                    addMessage('assistant', 'Error: Unable to process your message.');
+                }
+            } catch (error) {
+                console.error('Send message error:', error);
+                addMessage('assistant', 'Error: Unable to connect to the server.');
+            } finally {
+                isTyping = false;
+                renderMessages();
+            }
+        }
+
+        // Update send button
+        function updateSendButton() {
+            const input = document.getElementById('messageInput');
+            const button = document.getElementById('sendButton');
+
+            if (input.value.trim() && !isTyping) {
+                button.className = 'p-3 rounded-xl transition-all bg-blue-600 hover:bg-blue-700 text-white';
+                button.disabled = false;
+            } else {
+                button.className = 'p-3 rounded-xl transition-all bg-gray-200 text-gray-400';
+                button.disabled = true;
+            }
+        }
+
+        // Clear history (clear messages but keep session)
+        async function clearHistory() {
+            if (!currentSessionId) return;
+            
+            try {
+                await fetch(`${API_BASE_URL}/clear_session`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        user_id: getUserId(),
+                        session_id: currentSessionId
+                    })
+                });
+            } catch (error) {
+                console.error('Clear error:', error);
+            }
+            
+            // Clear messages and reinitialize with greeting
+            messages = [];
+            isInitialized = false;
+            await initializeChat();
+        }
+
+        // New chat (create new session)
+        async function newChat() {
+            currentSessionId = null;
+            messages = [];
+            isInitialized = false;
+            await loadSessions();
+            await initializeChat();
+        }
+
+        // Scroll to bottom
+        function scrollToBottom() {
+            const container = document.getElementById('messageContainer');
+            setTimeout(() => {
+                container.scrollTop = container.scrollHeight;
+            }, 100);
+        }
+
+        // Escape HTML
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        function linkify(text) {
+            const urlPattern = /(\bhttps?:\/\/[^\s]+)/gi;
+            return text.replace(urlPattern, '<a href="$1" target="_blank" class="text-blue-600 underline break-words">$1</a>');
+        }
+        // Format assistant message: headings + bullet points
+        // function formatAssistantMessage(text) {
+        //     const lines = (text || '').split('\n');
+        //     let html = '';
+        //     let inList = false;
+
+        //     // Helper function to convert **bold** to <strong>bold</strong>
+        //     const processBold = (text) => {
+        //         return escapeHtml(text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        //     };
+
+        //     const closeListIfOpen = () => {
+        //         if (inList) {
+        //             html += '</ul>';
+        //             inList = false;
+        //         }
+        //     };
+
+        //     // Common section headings to detect as headings even without markdown
+        //     const sectionHeadings = ['Overview', 'Key Points', 'Summary', 'Compliance Requirements', 
+        //                             'Disclosure Rules', 'Regulatory Obligations', 'Important Notes'];
+            
+        //     for (let rawLine of lines) {
+        //         const line = rawLine.trim();
+
+        //         if (!line) {
+        //             closeListIfOpen();
+        //             html += '<br>';
+        //             continue;
+        //         }
+
+        //         // Headings: #, ##, ###
+        //         if (line.startsWith('### ')) {
+        //             closeListIfOpen();
+        //             html += `<h3 class="font-semibold text-sm mb-1">${processBold(line.slice(4))}</h3>`;
+        //         } else if (line.startsWith('## ')) {
+        //             closeListIfOpen();
+        //             html += `<h2 class="font-semibold text-base mb-1">${processBold(line.slice(3))}</h2>`;
+        //         } else if (line.startsWith('# ')) {
+        //             closeListIfOpen();
+        //             html += `<h1 class="font-semibold text-base mb-1">${processBold(line.slice(2))}</h1>`;
+        //         }
+        //         // Fallback: Detect standalone section headings (like "Overview", "Key Points", "Summary")
+        //         else if (sectionHeadings.includes(line) && line.length < 50) {
+        //             closeListIfOpen();
+        //             html += `<h2 class="font-semibold text-base mb-1 mt-2">${processBold(line)}</h2>`;
+        //         }
+        //         // Bullet points: "- " or "* "
+        //         else if (line.startsWith('- ') || line.startsWith('* ')) {
+        //             if (!inList) {
+        //                 html += '<ul class="list-disc ml-5 space-y-1 text-sm">';
+        //                 inList = true;
+        //             }
+        //             html += `<li>${processBold(line.slice(2))}</li>`;
+        //         }
+        //         // Numbered list: "1. ", "2. ", etc.
+        //         else if (/^\d+\.\s+/.test(line)) {
+        //             if (!inList) {
+        //                 html += '<ul class="list-decimal ml-5 space-y-1 text-sm">';
+        //                 inList = true;
+        //             }
+        //             html += `<li>${processBold(line.replace(/^\d+\.\s+/, ''))}</li>`;
+        //         } else {
+        //             closeListIfOpen();
+        //             html += `<p class="text-sm leading-relaxed mb-1 whitespace-pre-wrap">${processBold(line)}</p>`;
+        //         }
+        //     }
+
+        //     closeListIfOpen();
+        //     return html || '<p class="text-sm leading-relaxed whitespace-pre-wrap"></p>';
+        // }
+        function formatAssistantMessage(text) {
+            if (!text) return '<p class="text-sm leading-relaxed whitespace-pre-wrap"></p>';
+            
+            let html = '';
+            
+            // Process the text in blocks
+            const lines = text.split('\n');
+            let inList = false;
+            let inTable = false;
+            let tableRows = [];
+            let inCodeBlock = false;
+            let codeContent = '';
+
+            const processBold = (t) => {
+                let result = escapeHtml(t);
+                // Bold: **text**
+                result = result.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+                // Inline code: `text`
+                result = result.replace(/`([^`]+)`/g, '<code>$1</code>');
+                // Links
+                result = linkify(result);
+                // Emoji status indicators
+                result = result.replace(/✅/g, '<span class="status-valid">✅</span>');
+                result = result.replace(/⚠️/g, '<span class="status-warning">⚠️</span>');
+                result = result.replace(/❌/g, '<span class="status-invalid">❌</span>');
+                return result;
+            };
+
+            const closeListIfOpen = () => {
+                if (inList) {
+                    html += '</ul>';
+                    inList = false;
+                }
+            };
+
+            const closeTableIfOpen = () => {
+                if (inTable && tableRows.length > 0) {
+                    html += '<div class="overflow-x-auto"><table>';
+                    tableRows.forEach((row, idx) => {
+                        const tag = idx === 0 ? 'th' : 'td';
+                        const wrapper = idx === 0 ? 'thead' : 'tbody';
+                        if (idx === 0) html += `<${wrapper}><tr>`;
+                        else if (idx === 1) html += '<tbody><tr>';
+                        else html += '<tr>';
+                        
+                        row.forEach(cell => {
+                            html += `<${tag}>${processBold(cell.trim())}</${tag}>`;
+                        });
+                        
+                        if (idx === 0) html += `</tr></${wrapper}>`;
+                        else html += '</tr>';
+                    });
+                    html += '</tbody></table></div>';
+                    tableRows = [];
+                    inTable = false;
+                }
+            };
+
+            const sectionHeadings = ['Overview', 'Key Points', 'Summary', 'Compliance Requirements', 
+                                    'Disclosure Rules', 'Regulatory Obligations', 'Important Notes',
+                                    'Message Overview', 'Field Breakdown', 'Purpose', 'Validation',
+                                    'Final Verdict', 'Recommendations', 'FIX Message Analysis',
+                                    'Session vs Application Level', 'Validation Results',
+                                    'Valid Fields', 'Warnings', 'Errors', 'Issues'];
+
+            for (let i = 0; i < lines.length; i++) {
+                const rawLine = lines[i];
+                const line = rawLine.trim();
+                
+                // Handle code blocks
+                if (line.startsWith('```')) {
+                    if (inCodeBlock) {
+                        html += `<pre><code>${escapeHtml(codeContent.trim())}</code></pre>`;
+                        codeContent = '';
+                        inCodeBlock = false;
+                    } else {
+                        closeListIfOpen();
+                        closeTableIfOpen();
+                        inCodeBlock = true;
+                    }
+                    continue;
+                }
+                
+                if (inCodeBlock) {
+                    codeContent += rawLine + '\n';
+                    continue;
+                }
+                
+                // Empty line
+                if (!line) {
+                    closeListIfOpen();
+                    closeTableIfOpen();
+                    html += '<br>';
+                    continue;
+                }
+                
+                // Horizontal rule
+                if (line === '---' || line === '***' || line === '___') {
+                    closeListIfOpen();
+                    closeTableIfOpen();
+                    html += '<hr>';
+                    continue;
+                }
+                
+                // Table row detection (contains | and at least 2 cells)
+                if (line.includes('|') && line.split('|').filter(c => c.trim()).length >= 2) {
+                    // Skip separator row (|---|---|)
+                    if (/^\|?[\s\-:]+\|/.test(line)) {
+                        continue;
+                    }
+                    closeListIfOpen();
+                    inTable = true;
+                    const cells = line.split('|').filter(c => c.trim() !== '');
+                    tableRows.push(cells);
+                    continue;
+                } else {
+                    closeTableIfOpen();
+                }
+
+                // Headings: #, ##, ###, ####
+                if (line.startsWith('#### ')) {
+                    closeListIfOpen();
+                    html += `<h4 class="font-semibold text-sm mb-1 mt-3">${processBold(line.slice(5))}</h4>`;
+                } else if (line.startsWith('### ')) {
+                    closeListIfOpen();
+                    html += `<h3 class="font-semibold text-sm mb-1 mt-3">${processBold(line.slice(4))}</h3>`;
+                } else if (line.startsWith('## ')) {
+                    closeListIfOpen();
+                    html += `<h2 class="font-bold text-base mb-2 mt-4">${processBold(line.slice(3))}</h2>`;
+                } else if (line.startsWith('# ')) {
+                    closeListIfOpen();
+                    html += `<h1 class="font-bold text-lg mb-2 mt-4">${processBold(line.slice(2))}</h1>`;
+                }
+                // Detect section headings (standalone text that matches known patterns)
+                else if (sectionHeadings.some(h => line.toLowerCase().includes(h.toLowerCase())) && line.length < 60 && !line.includes(':')) {
+                    closeListIfOpen();
+                    html += `<h3 class="font-semibold text-sm mb-1 mt-3">${processBold(line)}</h3>`;
+                }
+                // Bullet points: "- " or "* "
+                else if (line.startsWith('- ') || line.startsWith('* ')) {
+                    if (!inList) {
+                        html += '<ul class="list-disc ml-5 space-y-1 text-sm my-2">';
+                        inList = true;
+                    }
+                    html += `<li>${processBold(line.slice(2))}</li>`;
+                }
+                // Numbered list: "1. ", "2. ", etc.
+                else if (/^\d+\.\s+/.test(line)) {
+                    if (!inList) {
+                        html += '<ol class="list-decimal ml-5 space-y-1 text-sm my-2">';
+                        inList = true;
+                    }
+                    html += `<li>${processBold(line.replace(/^\d+\.\s+/, ''))}</li>`;
+                }
+                // Bold label line: **Label**: value
+                else if (line.startsWith('**') && line.includes('**:')) {
+                    closeListIfOpen();
+                    html += `<p class="text-sm leading-relaxed mb-1">${processBold(line)}</p>`;
+                }
+                // Regular paragraph
+                else {
+                    closeListIfOpen();
+                    html += `<p class="text-sm leading-relaxed mb-1">${processBold(line)}</p>`;
+                }
+            }
+
+            closeListIfOpen();
+            closeTableIfOpen();
+            
+            return `<div class="message-content">${html}</div>`;
+        }
+        // // Submit feedback (like/dislike)
+
+        async function submitFeedback(messageId, feedbackType) {
+            if (!currentSessionId) {
+                console.error('No active session');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/feedback`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: getUserId(),
+                        session_id: currentSessionId,
+                        message_id: messageId,
+                        feedback_type: feedbackType
+                    })
+                });
+                
+                if (response.ok) {
+                    // Update button appearance
+                    const feedbackDiv = document.querySelector(`[data-message-id="${messageId}"]`);
+                    if (feedbackDiv) {
+                        const buttons = feedbackDiv.querySelectorAll('.feedback-btn');
+                        buttons.forEach(btn => {
+                            if (btn.dataset.type === feedbackType) {
+                                if (feedbackType === 'like') {
+                                    btn.classList.add('text-green-600', 'bg-green-50');
+                                    btn.classList.remove('text-gray-600');
+                                } else if (feedbackType === 'dislike') {
+                                    btn.classList.add('text-red-600', 'bg-red-50');
+                                    btn.classList.remove('text-gray-600');
+                                }
+                            } else {
+                                btn.classList.remove('text-green-600', 'bg-green-50', 'text-red-600', 'bg-red-50');
+                                btn.classList.add('text-gray-600');
+                            }
+                        });
+                    }
+                } else {
+                    console.error('Failed to submit feedback');
+                }
+            } catch (error) {
+                console.error('Feedback submission error:', error);
+            }
+        }
+        
+        // Show comment modal
+        function showCommentModal(messageId) {
+            const comment = prompt('Please provide your feedback:');
+            if (comment && comment.trim()) {
+                submitComment(messageId, comment.trim());
+            }
+        }
+        
+        // Submit comment feedback
+        async function submitComment(messageId, comment) {
+            if (!currentSessionId) {
+                console.error('No active session');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/feedback`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: getUserId(),
+                        session_id: currentSessionId,
+                        message_id: messageId,
+                        feedback_type: 'comment',
+                        comment: comment
+                    })
+                });
+                
+                if (response.ok) {
+                    // Update comment button appearance
+                    const feedbackDiv = document.querySelector(`[data-message-id="${messageId}"]`);
+                    if (feedbackDiv) {
+                        const commentBtn = feedbackDiv.querySelector('[data-type="comment"]');
+                        if (commentBtn) {
+                            commentBtn.classList.add('text-blue-600', 'bg-blue-50');
+                            commentBtn.classList.remove('text-gray-600');
+                        }
+                    }
+                } else {
+                    console.error('Failed to submit comment');
+                    alert('Failed to submit comment. Please try again.');
+                }
+            } catch (error) {
+                console.error('Comment submission error:', error);
+                alert('Error submitting comment. Please try again.');
+            }
+        }
+
+        // Initialize on load
+        document.addEventListener('DOMContentLoaded', function() {
+            init();
+
+            const input = document.getElementById('messageInput');
+            input.addEventListener('input', updateSendButton);
+            input.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendMessage();
+                }
+            });
+        });
+    </script>
+</body>
+</html>

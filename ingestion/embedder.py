@@ -9,8 +9,8 @@ from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 import json
 
-from openai import RateLimitError, APIError
 from dotenv import load_dotenv
+from sentence_transformers import SentenceTransformer
 
 from .chunker import DocumentChunk
 
@@ -29,26 +29,25 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# Initialize client with flexible provider
-embedding_client = get_embedding_client()
-EMBEDDING_MODEL = get_embedding_model()
+# Initialize SentenceTransformer model
+embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
 
 
 class EmbeddingGenerator:
-    """Generates embeddings for document chunks."""
+    """Generates embeddings for document chunks using SentenceTransformer with compliance law support."""
     
     def __init__(
         self,
-        model: str = EMBEDDING_MODEL,
+        model: str = 'all-MiniLM-L6-v2',
         batch_size: int = 100,
         max_retries: int = 3,
         retry_delay: float = 1.0
     ):
         """
-        Initialize embedding generator.
+        Initialize embedding generator optimized for compliance law documents.
         
         Args:
-            model: OpenAI embedding model to use
+            model: SentenceTransformer model to use (default: all-MiniLM-L6-v2)
             batch_size: Number of texts to process in parallel
             max_retries: Maximum number of retry attempts
             retry_delay: Delay between retries in seconds
@@ -57,19 +56,27 @@ class EmbeddingGenerator:
         self.batch_size = batch_size
         self.max_retries = max_retries
         self.retry_delay = retry_delay
-        
-        # Model-specific configurations
-        self.model_configs = {
-            "text-embedding-3-small": {"dimensions": 1536, "max_tokens": 8191},
-            "text-embedding-3-large": {"dimensions": 3072, "max_tokens": 8191},
-            "text-embedding-ada-002": {"dimensions": 1536, "max_tokens": 8191}
-        }
-        
-        if model not in self.model_configs:
-            logger.warning(f"Unknown model {model}, using default config")
-            self.config = {"dimensions": 1536, "max_tokens": 8191}
-        else:
-            self.config = self.model_configs[model]
+        self.reference_map = self._load_reference_map()
+    
+    def _load_reference_map(self) -> Dict[str, Any]:
+        """Load reference map for compliance law documents."""
+        try:
+            # Try to load from data folder
+            ref_map_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                'data',
+                'reference_map.json'
+            )
+            
+            if os.path.exists(ref_map_path):
+                with open(ref_map_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            
+            logger.warning(f"Reference map not found at {ref_map_path}")
+            return {}
+        except Exception as e:
+            logger.warning(f"Failed to load reference map: {e}")
+            return {}
     
     async def generate_embedding(self, text: str) -> List[float]:
         """
@@ -81,39 +88,28 @@ class EmbeddingGenerator:
         Returns:
             Embedding vector
         """
-        # Truncate text if too long
-        if len(text) > self.config["max_tokens"] * 4:  # Rough token estimation
-            text = text[:self.config["max_tokens"] * 4]
-        
-        for attempt in range(self.max_retries):
+        # Offload CPU-bound sentence-transformer call to thread to avoid blocking
+        try:
+            embedding = await asyncio.to_thread(embedding_model.encode, text)
             try:
-                response = await embedding_client.embeddings.create(
-                    model=self.model,
-                    input=text
-                )
-                
-                return response.data[0].embedding
-                
-            except RateLimitError as e:
-                if attempt == self.max_retries - 1:
-                    raise
-                
-                # Exponential backoff for rate limits
-                delay = self.retry_delay * (2 ** attempt)
-                logger.warning(f"Rate limit hit, retrying in {delay}s")
-                await asyncio.sleep(delay)
-                
-            except APIError as e:
-                logger.error(f"OpenAI API error: {e}")
-                if attempt == self.max_retries - 1:
-                    raise
-                await asyncio.sleep(self.retry_delay)
-                
-            except Exception as e:
-                logger.error(f"Unexpected error generating embedding: {e}")
-                if attempt == self.max_retries - 1:
-                    raise
-                await asyncio.sleep(self.retry_delay)
+                return embedding.tolist()
+            except Exception:
+                return list(embedding)
+        except Exception as e:
+            logger.warning(f"Embedding generation failed, returning zero vector: {e}")
+            return [0.0] * self.get_embedding_dimension()
+    
+    async def embed_text(self, text: str) -> List[float]:
+        """
+        Alias for generate_embedding for compatibility.
+        
+        Args:
+            text: Text to embed
+        
+        Returns:
+            Embedding vector
+        """
+        return await self.generate_embedding(text)
     
     async def generate_embeddings_batch(
         self,
@@ -135,63 +131,12 @@ class EmbeddingGenerator:
                 processed_texts.append("")
                 continue
                 
-            # Truncate if too long
-            if len(text) > self.config["max_tokens"] * 4:
-                text = text[:self.config["max_tokens"] * 4]
-            
             processed_texts.append(text)
         
-        for attempt in range(self.max_retries):
-            try:
-                response = await embedding_client.embeddings.create(
-                    model=self.model,
-                    input=processed_texts
-                )
-                
-                return [data.embedding for data in response.data]
-                
-            except RateLimitError as e:
-                if attempt == self.max_retries - 1:
-                    raise
-                
-                delay = self.retry_delay * (2 ** attempt)
-                logger.warning(f"Rate limit hit, retrying batch in {delay}s")
-                await asyncio.sleep(delay)
-                
-            except APIError as e:
-                logger.error(f"OpenAI API error in batch: {e}")
-                if attempt == self.max_retries - 1:
-                    # Fallback to individual processing
-                    return await self._process_individually(processed_texts)
-                await asyncio.sleep(self.retry_delay)
-                
-            except Exception as e:
-                logger.error(f"Unexpected error in batch embedding: {e}")
-                if attempt == self.max_retries - 1:
-                    return await self._process_individually(processed_texts)
-                await asyncio.sleep(self.retry_delay)
-    
-    async def _process_individually(
-        self,
-        texts: List[str]
-    ) -> List[List[float]]:
-        """
-        Process texts individually as fallback.
-        
-        Args:
-            texts: List of texts to embed
-        
-        Returns:
-            List of embedding vectors
-        """
         embeddings = []
         
-        for text in texts:
+        for text in processed_texts:
             try:
-                if not text or not text.strip():
-                    embeddings.append([0.0] * self.config["dimensions"])
-                    continue
-                
                 embedding = await self.generate_embedding(text)
                 embeddings.append(embedding)
                 
@@ -201,7 +146,7 @@ class EmbeddingGenerator:
             except Exception as e:
                 logger.error(f"Failed to embed text: {e}")
                 # Use zero vector as fallback
-                embeddings.append([0.0] * self.config["dimensions"])
+                embeddings.append([0.0] * 384)  # MiniLM-L6 has 384 dimensions
         
         return embeddings
     
@@ -273,7 +218,7 @@ class EmbeddingGenerator:
                         "embedding_error": str(e),
                         "embedding_generated_at": datetime.now().isoformat()
                     })
-                    chunk.embedding = [0.0] * self.config["dimensions"]
+                    chunk.embedding = [0.0] * 384  # MiniLM-L6 has 384 dimensions
                     embedded_chunks.append(chunk)
         
         logger.info(f"Generated embeddings for {len(embedded_chunks)} chunks")
@@ -293,7 +238,7 @@ class EmbeddingGenerator:
     
     def get_embedding_dimension(self) -> int:
         """Get the dimension of embeddings for this model."""
-        return self.config["dimensions"]
+        return 384  # MiniLM-L6 has 384 dimensions
 
 
 # Cache for embeddings
@@ -335,7 +280,7 @@ class EmbeddingCache:
 
 # Factory function
 def create_embedder(
-    model: str = EMBEDDING_MODEL,
+    model: str = 'all-MiniLM-L6-v2',
     use_cache: bool = True,
     **kwargs
 ) -> EmbeddingGenerator:

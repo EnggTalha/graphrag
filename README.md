@@ -1,117 +1,214 @@
-# Graph RAG with Knowledge Graph
+# Graph-RAG - Open Source Hybrid Search with Knowledge Graphs
 
-Intelligent Q/A system that combines **Vector Search** (PostgreSQL with pgvector) and a **Knowledge Graph** (Neo4j) to provide comprehensive insights from your documents.
+A completely **free and open source** Retrieval-Augmented Generation (RAG) system that combines **Vector Search** (PostgreSQL with pgvector) and **Knowledge Graphs** (Neo4j) for semantic understanding and context-aware question answering.
+
+## 🎯 Key Features
+
+- **100% Open Source**: MIT License, free forever
+- **Hybrid Search**: Vector embeddings + knowledge graph traversal
+- **Free LLM Models**: Use Ollama locally or any API provider
+- **Auto-Ingestion**: Watch directories and automatically process documents
+- **Knowledge Extraction**: Extract entities and relationships automatically
+- **REST API**: FastAPI-based endpoints for integration
+- **CLI Interface**: Interactive command-line chat
+- **Docker Ready**: Pre-configured containerized setup
 
 ## 📚 Documentation
 
-- **[PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md)** - System architecture and how it works
-- **[HOW_TO_RUN.md](HOW_TO_RUN.md)** - Quick start guide
-- **[SETUP_LINUX.md](SETUP_LINUX.md)** - Complete Linux setup with Docker
+- **[INSTALLATION.md](INSTALLATION.md)** - Setup and installation guide
 
-## 🚀 Quick Start
+## 🚀 Quick Start (5 minutes)
 
-### 1. Start Docker Containers
+### Prerequisites
+- Docker & Docker Compose
+- Python 3.11+
+- Optional: Ollama for free local LLM
+
+### 1. Clone and Setup
+
+```bash
+git clone https://github.com/EnggTalha/Graph_Rag.git
+cd Graph_Rag
+```
+
+### 2. Start Docker Services
 
 ```bash
 docker compose up -d
 ```
 
-### 2. Run Ingestion (Continuous Mode)
+### 3. Install Python Dependencies
 
 ```bash
-conda activate Talha
-python -m ingestion.ingest --documents data --watch --verbose
+conda create -n graph_rag python=3.11 -y
+conda activate graph_rag
+pip install -r requirements.txt
 ```
 
-This will:
-- Process existing files
-- Keep running and watch for new files
-- Auto-ingest new files automatically
+### 4. Configure Environment
 
-### 3. Start API & CLI
-
-**Terminal 1: API Server**
 ```bash
-python -m agent.api
+cp .env.example .env
+# Edit .env to set your LLM provider
+# Default: uses local Ollama (free, no API key needed)
 ```
 
-**Terminal 2: CLI**
+### 5. Initialize Database
+
+```bash
+python init_database.py
+```
+
+### 6. Start Using
+
+**Interactive CLI:**
 ```bash
 python cli.py
 ```
 
-## 📋 Supported File Formats
-
-- **Text**: `.txt`, `.md`, `.markdown`
-- **Documents**: `.pdf`, `.doc`, `.docx`
-- **Spreadsheets**: `.xls`, `.xlsx`, `.csv`
+**REST API Server:**
+```bash
+python -m agent.api
+# Visit http://localhost:8000/docs for API documentation
+```
 
 ## 🛠️ Technology Stack
 
-- **Backend**: FastAPI, Python 3.11+
-- **Databases**: PostgreSQL (with pgvector), Neo4j
-- **LLM**: OpenAI GPT-4.1-mini
-- **Embeddings**: OpenAI text-embedding-3-small
-- **Knowledge Graph**: Graphiti
-- **Deployment**: Docker, Docker Compose
+| Component | Technology |
+|-----------|-----------|
+| **Backend** | FastAPI (Python) |
+| **Vector DB** | PostgreSQL + pgvector |
+| **Graph DB** | Neo4j |
+| **LLM Models** | Ollama (local), OpenAI, Anthropic, HuggingFace |
+| **Embeddings** | HuggingFace (free) or OpenAI |
+| **Deployment** | Docker & Docker Compose |
 
-## 📖 Features
-
-- ✅ **Automatic File Ingestion** - Watches `data/` folder and auto-ingests new files
-- ✅ **Hybrid Search** - Combines vector similarity + graph relationships
-- ✅ **Knowledge Graph** - Tracks entities and relationships over time
-- ✅ **Continuous Mode** - Keeps running and watching for new files
-- ✅ **Multiple Formats** - Supports PDF, Word, Excel, CSV, TXT, Markdown
-
-## 📝 Requirements
-
-- Python 3.11+
-- Docker & Docker Compose
-- OpenAI API key
-- See `requirements.txt` for Python dependencies
-
-## 🔧 Installation
-
-See **[SETUP_LINUX.md](SETUP_LINUX.md)** for complete setup instructions.
-
-## 📊 Project Structure
+## 📁 Project Structure
 
 ```
-├── agent/              # AI agent and API
-├── ingestion/          # Document processing
-├── data/              # Your documents (PDF, Word, Excel, etc.)
-├── docker-compose.yml # Docker configuration
-└── requirements.txt   # Python dependencies
+Graph_Rag/
+├── agent/              # Core RAG agent and API
+├── ingestion/          # Document processing pipeline
+├── frontend/           # Web interface
+├── data/               # Your documents go here
+├── sql/                # Database schemas
+├── docker-compose.yml  # Service configuration
+├── cli.py              # Interactive CLI
+└── requirements.txt    # Python dependencies
 ```
 
-## 🎯 Usage
-
-### Continuous Ingestion (Recommended)
+## 📖 Common Commands
 
 ```bash
-# Watches data/ folder and auto-ingests new files
-python -m ingestion.ingest --documents data --watch --verbose
+# Start services
+docker compose up -d
+
+# Ingest documents
+python -m ingestion.ingest --documents ./data --watch --verbose
+
+# Start API server
+python -m agent.api
+
+# Start CLI
+python cli.py
+
+# View logs
+docker compose logs -f
+
+# Stop services
+docker compose down
 ```
 
-### One-Time Ingestion
+## 🤖 Using Free Local Models (Ollama)
+
+No API keys needed! Run everything on your machine:
 
 ```bash
-# Process files once and exit
-python -m ingestion.ingest --documents data --verbose
+# Install Ollama from https://ollama.ai
+
+# Download a free model
+ollama pull mistral
+
+# In .env, set:
+LLM_PROVIDER=ollama
+LLM_MODEL=mistral
+
+# Start using
+python cli.py
 ```
 
-### Check Data Status
+## 💰 Using Commercial APIs (Optional)
+
+If you prefer paid providers with more powerful models:
 
 ```bash
-python check_data.py
+# In .env, set:
+LLM_PROVIDER=openai
+LLM_API_KEY=sk-proj-your-key-here
 ```
 
-## 📚 More Information
+Supported providers:
+- OpenAI (GPT-4, GPT-3.5)
+- Anthropic (Claude)
+- HuggingFace (free cloud models)
+- Any OpenAI-compatible API
 
-- **System Overview**: See [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md)
-- **How to Run**: See [HOW_TO_RUN.md](HOW_TO_RUN.md)
-- **Setup Guide**: See [SETUP_LINUX.md](SETUP_LINUX.md)
+## 📋 Supported File Formats
+
+- **Text**: `.txt`, `.md`, `.markdown`, `.rst`
+- **Documents**: `.pdf`, `.doc`, `.docx`
+- **Data**: `.json`, `.csv`, `.xlsx`
+- **Code**: `.py`, `.js`, `.ts`, etc.
+
+## 🔗 API Documentation
+
+Once API server is running:
+- **Swagger UI**: http://localhost:8000/docs
+- **ReDoc**: http://localhost:8000/redoc
+
+## 🐛 Troubleshooting
+
+**Docker services won't start:**
+```bash
+# Check if ports are in use
+lsof -i :5432    # PostgreSQL
+lsof -i :7687    # Neo4j
+lsof -i :6379    # Redis
+
+# View logs
+docker compose logs
+```
+
+**Import errors:**
+```bash
+# Reinstall dependencies
+pip install -r requirements.txt --force-reinstall
+```
+
+**Database connection issues:**
+```bash
+# Check database is initialized
+python init_database.py
+
+# View database logs
+docker compose logs postgres
+```
+
+## 📞 Support
+
+For issues and questions:
+- Check [INSTALLATION.md](INSTALLATION.md) for detailed setup
+- Review docker compose logs: `docker compose logs`
+- Check .env configuration
+
+## 📄 License
+
+MIT License - See LICENSE file for details
+
+## 🎉 Getting Started
+
+See [INSTALLATION.md](INSTALLATION.md) for complete setup instructions for all platforms (Linux, macOS, Windows, WSL2).
 
 ---
 
-Built with ❤️ using Pydantic AI, FastAPI, PostgreSQL, and Neo4j.
+Built with ❤️ using FastAPI, PostgreSQL, Neo4j, and Ollama.

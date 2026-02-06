@@ -20,13 +20,15 @@ from .tools import (
     list_documents_tool,
     get_entity_relationships_tool,
     get_entity_timeline_tool,
+    fix_parser_tool,
     VectorSearchInput,
     GraphSearchInput,
     HybridSearchInput,
     DocumentInput,
     DocumentListInput,
     EntityRelationshipInput,
-    EntityTimelineInput
+    EntityTimelineInput,
+    FixParseInput
 )
 
 # Load environment variables
@@ -51,11 +53,20 @@ class AgentDependencies:
             }
 
 
+# Model settings for detailed responses
+from pydantic_ai.settings import ModelSettings
+
+model_settings = ModelSettings(
+    max_tokens=8192,  # Allow very long, detailed responses for comprehensive FIX analysis
+    temperature=0.2,  # Lower for more accurate, consistent, and precise parsing
+)
+
 # Initialize the agent with flexible model configuration
 rag_agent = Agent(
     get_llm_model(),
     deps_type=AgentDependencies,
-    system_prompt=SYSTEM_PROMPT
+    system_prompt=SYSTEM_PROMPT,
+    model_settings=model_settings
 )
 
 
@@ -65,20 +76,23 @@ async def vector_search(
     ctx: RunContext[AgentDependencies],
     query: str,
     limit: int = 10
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """
-    Search for relevant information using semantic similarity.
+    PRIORITY TOOL: Search for relevant information using semantic similarity.
     
-    This tool performs vector similarity search across document chunks
-    to find semantically related content. Returns the most relevant results
-    regardless of similarity score.
+    This tool MUST be called first before answering any question (except greetings).
+    It performs vector similarity search across document chunks to find 
+    semantically related content from FINRA rules, SEC regulations, compliance cases, etc.
     
     Args:
         query: Search query to find similar content
         limit: Maximum number of results to return (1-50)
     
     Returns:
-        List of matching chunks ordered by similarity (best first)
+        Dict with:
+        - results: List of matching chunks ordered by similarity
+        - has_relevant_results: True if good matches found (score > 0.3)
+        - use_database_answer: True if you should use these results as primary source
     """
     input_data = VectorSearchInput(
         query=query,
@@ -88,7 +102,7 @@ async def vector_search(
     results = await vector_search_tool(input_data)
     
     # Convert results to dict for agent
-    return [
+    result_list = [
         {
             "content": r.content,
             "score": r.score,
@@ -98,6 +112,28 @@ async def vector_search(
         }
         for r in results
     ]
+    
+    # Determine if results are relevant - check BOTH score AND content relevance
+    has_relevant = len(result_list) > 0 and any(r["score"] > 0.4 for r in result_list)
+    high_quality = len(result_list) > 0 and any(r["score"] > 0.6 for r in result_list)
+    
+    # Check if query terms appear in results (basic relevance check)
+    query_words = set(query.lower().split())
+    content_matches = any(
+        any(word in r["content"].lower() for word in query_words if len(word) > 3)
+        for r in result_list
+    )
+    
+    # Final determination
+    is_truly_relevant = has_relevant and content_matches
+    
+    return {
+        "results": result_list if is_truly_relevant else [],  # Return empty if not relevant
+        "total_found": len(result_list) if is_truly_relevant else 0,
+        "has_relevant_results": is_truly_relevant,
+        "use_database_answer": is_truly_relevant and high_quality,
+        "guidance": "USE THESE RESULTS AS PRIMARY SOURCE - cite document titles" if (is_truly_relevant and high_quality) else ("Some relevant results found - use as supporting info" if is_truly_relevant else "NO RELEVANT RESULTS FOUND - use your own training knowledge to answer this question directly")
+    }
 
 
 @rag_agent.tool
@@ -308,3 +344,35 @@ async def get_entity_timeline(
     )
     
     return await get_entity_timeline_tool(input_data)
+
+
+@rag_agent.tool
+async def fix_decoder(
+    ctx: RunContext[AgentDependencies],
+    message: str
+) -> str:
+    """
+    SPECIALIZED TOOL: Decode and explain FIX protocol messages in detail.
+    
+    This tool parses FIX (Financial Information eXchange) protocol messages
+    and provides comprehensive explanations of all tags, values, and message meaning.
+    FIX is the standard protocol for securities transaction messaging.
+    
+    Use this tool when:
+    - User provides a FIX message to decode (e.g., "8=FIX.4.4^9=100^35=D^...")
+    - User asks about FIX tags or message types
+    - User needs detailed explanation of order execution messages, logon sequences, etc.
+    
+    Args:
+        message: The FIX protocol message string to decode
+    
+    Returns:
+        Detailed explanation with:
+        - Message type and purpose
+        - All tag definitions and values
+        - Plain English summary
+        - Common reference information
+    """
+    input_data = FixParseInput(message=message)
+    
+    return await fix_parser_tool(input_data)

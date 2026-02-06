@@ -259,6 +259,100 @@ async def get_session_messages(
         ]
 
 
+async def get_user_sessions(user_id: str) -> List[Dict[str, Any]]:
+    """
+    Get all sessions for a user.
+    
+    Args:
+        user_id: User identifier
+    
+    Returns:
+        List of sessions with their metadata
+    """
+    async with db_pool.acquire() as conn:
+        results = await conn.fetch(
+            """
+            SELECT 
+                s.id::text as session_id,
+                s.user_id,
+                s.metadata,
+                s.created_at,
+                s.updated_at,
+                (SELECT content FROM messages m WHERE m.session_id = s.id ORDER BY m.created_at LIMIT 1) as first_message
+            FROM sessions s
+            WHERE s.user_id = $1
+            AND (s.expires_at IS NULL OR s.expires_at > CURRENT_TIMESTAMP)
+            ORDER BY s.updated_at DESC
+            LIMIT 50
+            """,
+            user_id
+        )
+        
+        return [
+            {
+                "session_id": row["session_id"],
+                "user_id": row["user_id"],
+                "metadata": json.loads(row["metadata"]) if row["metadata"] else {},
+                "title": (row["first_message"] or "New Chat")[:50],
+                "created_at": row["created_at"].isoformat(),
+                "updated_at": row["updated_at"].isoformat()
+            }
+            for row in results
+        ]
+
+
+async def delete_session(session_id: str, user_id: str) -> bool:
+    """
+    Delete a session and its messages.
+    
+    Args:
+        session_id: Session UUID
+        user_id: User identifier (for authorization)
+    
+    Returns:
+        True if deleted, False if not found
+    """
+    async with db_pool.acquire() as conn:
+        # First delete messages
+        await conn.execute(
+            """
+            DELETE FROM messages WHERE session_id = $1::uuid
+            """,
+            session_id
+        )
+        
+        # Then delete session
+        result = await conn.execute(
+            """
+            DELETE FROM sessions WHERE id = $1::uuid AND user_id = $2
+            """,
+            session_id,
+            user_id
+        )
+        
+        return result.split()[-1] != "0"
+
+
+async def clear_session_messages(session_id: str) -> bool:
+    """
+    Clear all messages from a session but keep the session.
+    
+    Args:
+        session_id: Session UUID
+    
+    Returns:
+        True if cleared
+    """
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            """
+            DELETE FROM messages WHERE session_id = $1::uuid
+            """,
+            session_id
+        )
+        return True
+
+
 # Document Management Functions
 async def get_document(document_id: str) -> Optional[Dict[str, Any]]:
     """
