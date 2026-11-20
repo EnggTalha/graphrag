@@ -1,0 +1,27 @@
+[
+  {
+    "id": "q1",
+    "question": "What are the key FINRA rules governing broker-dealer conduct?",
+    "notes": "Tests retrieval of regulatory rule content."
+  },
+  {
+    "id": "q2",
+    "question": "Summarize the main requirements of SEC Regulation Best Interest.",
+    "notes": "Tests summarization over retrieved regulation text."
+  },
+  {
+    "id": "q3",
+    "question": "How should a firm handle a suspected case of insider trading?",
+    "notes": "Tests procedural / compliance-case retrieval."
+  },
+  {
+    "id": "q4",
+    "question": "What is the structure of a FIX protocol NewOrderSingle message?",
+    "notes": "Tests domain-specific technical retrieval."
+  },
+  {
+    "id": "q5",
+    "question": "What recordkeeping obligations apply to electronic communications?",
+    "notes": "Tests retrieval of recordkeeping requirements."
+  }
+]

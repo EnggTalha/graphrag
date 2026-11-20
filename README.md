@@ -88,9 +88,12 @@ python -m agent.api
 ```
 Graph_Rag/
 ├── agent/              # Core RAG agent and API
+│   └── vector_store/   # Swappable vector DB adapters (pgvector/qdrant/chroma)
+├── benchmark/          # Vector DB + multi-LLM comparison runner
 ├── ingestion/          # Document processing pipeline
 ├── frontend/           # Web interface
-├── data/               # Your documents go here
+├── data/               # Your documents + data/eval_questions.json
+├── results/            # Benchmark output (comparison_summary.csv)
 ├── sql/                # Database schemas
 ├── docker-compose.yml  # Service configuration
 ├── cli.py              # Interactive CLI
@@ -112,12 +115,117 @@ python -m agent.api
 # Start CLI
 python cli.py
 
+# Run the benchmark (vector DB + LLM comparison -> results/comparison_summary.csv)
+python -m benchmark --backends pgvector qdrant chroma --load-from-pg --llms mistral llama3
+
 # View logs
 docker compose logs -f
 
 # Stop services
 docker compose down
 ```
+
+## 📊 Benchmarking: Vector DB & Multi-LLM Comparison
+
+The `benchmark/` suite compares vector-DB backends and LLMs over a fixed set of evaluation
+questions. It runs **vector-only**, **graph-only**, and **hybrid** retrieval, records
+retrieval latency (ms) per vector DB, then passes the **same retrieved context** to each
+configured LLM and logs generation latency (ms), token usage, and the answer into
+`results/comparison_summary.csv`.
+
+Supported vector backends (swappable via a `BaseVectorStore` interface, pgvector is the
+default): **pgvector** (PostgreSQL), **Qdrant** (local path or in-memory), **ChromaDB**
+(persistent local directory). Neo4j knowledge-graph retrieval is unchanged.
+
+### Prerequisites
+
+```bash
+# Core services + an LLM must be reachable (same as normal usage)
+docker compose up -d                      # PostgreSQL (pgvector) + Neo4j
+ollama pull mistral                       # at least one LLM (or configure an API in .env)
+
+# Install optional benchmark adapters (only needed for Qdrant/Chroma)
+pip install qdrant-client chromadb
+
+# Make sure documents are already ingested so the vector DB has chunks
+python -m ingestion.ingest --documents ./data
+```
+
+Questions live in `data/eval_questions.json` (edit or replace with your own).
+
+### 1. Vector DB comparison
+
+Run the **same embedded chunks** against each vector DB, one at a time. `--load-from-pg`
+copies the chunks already stored in pgvector into Qdrant and ChromaDB so the comparison is
+fair (it is a no-op for pgvector):
+
+```bash
+python -m benchmark \
+  --backends pgvector qdrant chroma \
+  --load-from-pg \
+  --llms mistral \
+  --output results/comparison_summary.csv
+```
+
+Each backend contributes rows for every question × mode (`vector`, `graph`, `hybrid`) with
+its `retrieval_latency_ms`.
+
+### 2. Multi-LLM comparison
+
+Compare several LLMs on identical retrieved context (local Ollama models and/or
+OpenAI-compatible APIs configured in `.env`):
+
+```bash
+python -m benchmark \
+  --backends pgvector \
+  --llms mistral llama3 \
+  --output results/comparison_summary.csv
+```
+
+### 3. Combined comparison (all backends × all LLMs)
+
+```bash
+python -m benchmark \
+  --backends pgvector qdrant chroma --load-from-pg \
+  --llms mistral llama3 \
+  --modes vector graph hybrid \
+  --output results/comparison_summary.csv
+```
+
+### Output
+
+`results/comparison_summary.csv` columns:
+
+| Column | Meaning |
+|--------|---------|
+| `backend` | Vector DB used (pgvector / qdrant / chroma) |
+| `mode` | Retrieval mode (vector / graph / hybrid) |
+| `question_id`, `question` | The evaluation question |
+| `llm_model` | LLM that generated the answer |
+| `retrieval_latency_ms` | Retrieval time for that backend+mode |
+| `generation_latency_ms` | LLM generation time |
+| `prompt_tokens`, `completion_tokens`, `total_tokens` | Token usage (blank if unreported) |
+| `num_context_chunks` | Chunks included in the shared context |
+| `answer` | Generated answer |
+| `error` | Any per-cell error (run continues on failure) |
+
+### Useful flags
+
+```bash
+python -m benchmark --help
+#   --backends {pgvector,qdrant,chroma} ...
+#   --llms MODEL [MODEL ...]
+#   --modes {vector,graph,hybrid} ...
+#   --questions PATH        (default: data/eval_questions.json)
+#   --output PATH           (default: results/comparison_summary.csv)
+#   --limit N               (max results per retrieval, default 5)
+#   --text-weight FLOAT     (hybrid text weight 0-1, default 0.3)
+#   --load-from-pg          (copy pgvector chunks into the selected backend)
+#   --max-questions N       (quick run on first N questions)
+```
+
+Relevant `.env` settings: `VECTOR_BACKEND`, `EMBEDDING_DIMENSION`, `QDRANT_PATH`,
+`QDRANT_IN_MEMORY`, `CHROMA_PATH`, `BENCHMARK_LLMS`, `BENCHMARK_LIMIT` (see `.env.example`).
 
 ## 🤖 Using Free Local Models (Ollama)
 

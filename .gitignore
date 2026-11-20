@@ -195,3 +195,8 @@ secrets/
 *.key
 *.pem
 *.crt
+
+# Benchmark local vector-store data and generated results
+data/qdrant/
+data/chroma/
+results/*.csv
